@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DijkstraFood - Painel de Pedidos</title>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    input, select { margin: 5px 0; padding: 5px; }
+    button { margin: 5px 0; padding: 5px 10px; }
+    hr { margin: 20px 0; }
+    pre { background: #f4f4f4; padding: 10px; }
+  </style>
+</head>
+<body>
+
+<h1>💡 DijkstraFood - Painel de Pedidos</h1>
+
+<!-- Criar Pedido -->
+<h2>Criar Pedido</h2>
+<label>Client ID:</label><br>
+<input id="client" placeholder="ID do Cliente"><br>
+<label>Restaurant ID:</label><br>
+<input id="restaurant" placeholder="ID do Restaurante"><br>
+<label>Item:</label><br>
+<input id="item" placeholder="Nome do item"><br>
+<label>Quantidade:</label><br>
+<input id="quantity" type="number" placeholder="Quantidade"><br>
+<button onclick="createOrder()">Criar Pedido</button>
+<pre id="createResult"></pre>
+
+<hr>
+
+<!-- Atualizar Status -->
+<h2>Atualizar Status do Pedido</h2>
+<label>Order ID:</label><br>
+<input id="orderIdStatus" placeholder="ID do Pedido"><br>
+<label>Status:</label><br>
+<select id="status">
+  <option value="pending">pending</option>
+  <option value="preparing">preparing</option>
+  <option value="on_the_way">on_the_way</option>
+  <option value="delivered">delivered</option>
+</select><br>
+<button onclick="updateStatus()">Atualizar Status</button>
+<pre id="updateResult"></pre>
+
+<hr>
+
+<!-- Buscar Pedido -->
+<h2>Buscar Pedido</h2>
+<label>Order ID:</label><br>
+<input id="orderIdGet" placeholder="ID do Pedido"><br>
+<button onclick="getOrder()">Buscar</button>
+<pre id="getResult"></pre>
+
+<script>
+const API_BASE = "http://127.0.0.1:8000"; // Alterar se API estiver em outro IP
+
+// Criar Pedido
+async function createOrder() {
+  const data = {
+    client_id: parseInt(document.getElementById("client").value),
+    restaurant_id: parseInt(document.getElementById("restaurant").value),
+    items: [
+      { 
+        name: document.getElementById("item").value,
+        quantity: parseInt(document.getElementById("quantity").value)
+      }
+    ]
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    document.getElementById("createResult").textContent = JSON.stringify(result, null, 2);
+  } catch (err) {
+    document.getElementById("createResult").textContent = "Erro: " + err;
+  }
+}
+
+// Atualizar Status
+async function updateStatus() {
+  const order_id = parseInt(document.getElementById("orderIdStatus").value);
+  const status = document.getElementById("status").value;
+
+  try {
+    const res = await fetch(`${API_BASE}/orders/${order_id}/status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    });
+    const result = await res.json();
+    document.getElementById("updateResult").textContent = JSON.stringify(result, null, 2);
+  } catch (err) {
+    document.getElementById("updateResult").textContent = "Erro: " + err;
+  }
+}
+
+// Buscar Pedido
+async function getOrder() {
+  const order_id = parseInt(document.getElementById("orderIdGet").value);
+  try {
+    const res = await fetch(`${API_BASE}/orders/${order_id}`);
+    const result = await res.json();
+    document.getElementById("getResult").textContent = JSON.stringify(result, null, 2);
+  } catch (err) {
+    document.getElementById("getResult").textContent = "Erro: " + err;
+  }
+}
+</script>
+
+</body>
+</html>

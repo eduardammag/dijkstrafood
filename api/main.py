@@ -1,37 +1,39 @@
-# Importa o FastAPI (framework web) e HTTPException (para retornar erros HTTP)
 from fastapi import FastAPI, HTTPException
-
-# BaseModel serve para validar os dados recebidos no corpo das requisições
 from pydantic import BaseModel
-
-# List é usado para tipagem de listas (ex: lista de itens)
 from typing import List
-
-# Biblioteca para conectar com PostgreSQL
 import psycopg2
-
-# Para acessar variáveis de ambiente (ex: senha do banco)
 import os
-
-# Permite carregar variáveis do arquivo .env
 from dotenv import load_dotenv
+import boto3
+from datetime import datetime
+from fastapi.staticfiles import StaticFiles
 
-
-# Carrega as variáveis de ambiente do arquivo .env (se existir)
+app.mount("/static", StaticFiles(directory="\dijkstrafood\static"), name="static")
+# -------------------------
+# CARREGAR VARIÁVEIS DE AMBIENTE
+# -------------------------
 load_dotenv()
 
-# Cria a aplicação FastAPI
+# -------------------------
+# CONFIGURAÇÃO AWS DYNAMODB
+# -------------------------
+dynamodb = boto3.resource(
+    'dynamodb',
+    region_name=os.getenv("AWS_REGION", "us-east-1"),
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+)
+realtime_table = dynamodb.Table(os.getenv("DYNAMO_TABLE", "OrdersRealtime"))
+
+# -------------------------
+# FASTAPI APP
+# -------------------------
 app = FastAPI()
 
-
-# =============================
-# FUNÇÃO DE CONEXÃO COM O BANCO
-# =============================
+# -------------------------
+# FUNÇÃO DE CONEXÃO COM RDS (PostgreSQL)
+# -------------------------
 def get_connection():
-    """
-    Cria e retorna uma conexão com o banco PostgreSQL.
-    Usa variáveis de ambiente (ou valores padrão caso não existam).
-    """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "SEU_RDS_ENDPOINT"),
         database=os.getenv("DB_NAME", "dijkstrafood"),
@@ -40,173 +42,118 @@ def get_connection():
         port=os.getenv("DB_PORT", "5432")
     )
 
-
-# =============================
-# MODELOS (SCHEMA DAS REQUISIÇÕES)
-# =============================
-
+# -------------------------
+# MODELOS DE REQUISIÇÃO
+# -------------------------
 class Item(BaseModel):
-    """
-    Representa um item dentro do pedido.
-    Exemplo:
-    {
-        "name": "Pizza",
-        "quantity": 2
-    }
-    """
     name: str
     quantity: int
 
-
 class OrderRequest(BaseModel):
-    """
-    Representa o corpo da requisição para criar um pedido.
-    """
     client_id: int
     restaurant_id: int
-    items: List[Item]  # lista de itens
-
+    items: List[Item]
 
 class StatusUpdate(BaseModel):
-    """
-    Representa o corpo da requisição para atualizar status do pedido.
-    """
     status: str
 
-
-# =============================
-# ENDPOINT DE TESTE (HEALTH CHECK)
-# =============================
-
+# -------------------------
+# HEALTH CHECK
+# -------------------------
 @app.get("/")
 def health():
-    """
-    Endpoint simples para verificar se a API está funcionando.
-    Acessar no navegador: http://localhost:8000/
-    """
     return {"status": "API running"}
 
-
-# =============================
-# CRIAR PEDIDO
-# =============================
-
+# -------------------------
+# CRIAR PEDIDO (RDS + DynamoDB)
+# -------------------------
 @app.post("/orders")
 def create_order(order: OrderRequest):
-    """
-    Cria um novo pedido no banco de dados.
-
-    Fluxo:
-    1. Cria o pedido na tabela 'orders'
-    2. Insere os itens na tabela 'order_items'
-    3. Registra evento inicial na tabela 'order_events'
-    """
-
-    # Abre conexão com o banco
     conn = get_connection()
-
     try:
-        # 'with conn' inicia uma transação automaticamente
         with conn:
-            # Cria um cursor (objeto que executa SQL)
             with conn.cursor() as cur:
-
-                # 1. INSERIR PEDIDO
-                cur.execute(
-                    """
+                # 1. Criar pedido RDS
+                cur.execute("""
                     INSERT INTO orders (client_id, restaurant_id, order_status)
                     VALUES (%s, %s, %s)
                     RETURNING order_id
-                    """,
-                    # Valores que substituem os %s
-                    (order.client_id, order.restaurant_id, "pending")
-                )
-
-                # Pega o ID do pedido recém criado
+                """, (order.client_id, order.restaurant_id, "pending"))
                 order_id = cur.fetchone()[0]
 
-                # 2. INSERIR ITENS DO PEDIDO
+                # 2. Inserir itens
                 for item in order.items:
-                    cur.execute(
-                        """
+                    cur.execute("""
                         INSERT INTO order_items (order_id, item_name, quantity)
                         VALUES (%s, %s, %s)
-                        """,
-                        (order_id, item.name, item.quantity)
-                    )
+                    """, (order_id, item.name, item.quantity))
 
-                # 3. CRIAR EVENTO INICIAL
-                cur.execute(
-                    """
+                # 3. Criar evento inicial
+                cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
-                    """,
-                    (order_id, "pending")
-                )
+                """, (order_id, "pending"))
 
-        # Se tudo deu certo, retorna sucesso
-        return {
-            "message": "Order created successfully",
-            "order_id": order_id
-        }
+        # 4. Salvar em DynamoDB (tempo real)
+        realtime_table.put_item(
+            Item={
+                'order_id': str(order_id),
+                'client_id': str(order.client_id),
+                'restaurant_id': str(order.restaurant_id),
+                'status': 'pending',
+                'updated_at': datetime.utcnow().isoformat(),
+                'items': [{'name': i.name, 'quantity': i.quantity} for i in order.items]
+            }
+        )
+
+        return {"message": "Order created successfully", "order_id": order_id}
 
     except Exception as e:
-        # Se der erro, desfaz a transação
         conn.rollback()
-
-        # Retorna erro HTTP 500 com mensagem
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        # Fecha a conexão com o banco (sempre executa)
         conn.close()
 
-
-# =============================
-# ATUALIZAR STATUS DO PEDIDO
-# =============================
-
+# -------------------------
+# ATUALIZAR STATUS DO PEDIDO (RDS + DynamoDB)
+# -------------------------
 @app.put("/orders/{order_id}/status")
 def update_status(order_id: int, body: StatusUpdate):
-    """
-    Atualiza o status de um pedido existente.
-
-    Também registra esse evento na tabela 'order_events'.
-    """
-
     conn = get_connection()
-
     try:
         with conn:
             with conn.cursor() as cur:
-
-                # 1. ATUALIZAR STATUS NA TABELA
-                cur.execute(
-                    """
+                # Atualizar RDS
+                cur.execute("""
                     UPDATE orders
                     SET order_status = %s
                     WHERE order_id = %s
-                    """,
-                    (body.status, order_id)
-                )
+                """, (body.status, order_id))
 
-                # Se nenhuma linha foi afetada, pedido não existe
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Order not found")
 
-                # 2. REGISTRAR EVENTO
-                cur.execute(
-                    """
+                # Registrar evento RDS
+                cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
-                    """,
-                    (order_id, body.status)
-                )
+                """, (order_id, body.status))
+
+        # Atualizar DynamoDB
+        realtime_table.update_item(
+            Key={'order_id': str(order_id)},
+            UpdateExpression="SET #s = :status, updated_at = :now",
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={
+                ':status': body.status,
+                ':now': datetime.utcnow().isoformat()
+            }
+        )
 
         return {"message": "Status updated"}
 
     except HTTPException:
-        # Repassa erros já tratados
         raise
 
     except Exception as e:
@@ -216,66 +163,45 @@ def update_status(order_id: int, body: StatusUpdate):
     finally:
         conn.close()
 
-
-# =============================
+# -------------------------
 # BUSCAR DETALHES DO PEDIDO
-# =============================
-
+# -------------------------
 @app.get("/orders/{order_id}")
 def get_order(order_id: int):
-    """
-    Retorna:
-    - Dados do pedido
-    - Itens do pedido
-    - Histórico de eventos (status)
-    """
-
     conn = get_connection()
-
     try:
         with conn.cursor() as cur:
-
-            # =============================
-            # 1. BUSCAR PEDIDO
-            # =============================
-            cur.execute(
-                "SELECT * FROM orders WHERE order_id = %s",
-                (order_id,)
-            )
+            # Pedido
+            cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
             order = cur.fetchone()
-
-            # Se não existir
             if not order:
                 raise HTTPException(status_code=404, detail="Order not found")
 
-            # =============================
-            # 2. BUSCAR ITENS
-            # =============================
-            cur.execute(
-                "SELECT item_name, quantity FROM order_items WHERE order_id = %s",
-                (order_id,)
-            )
+            # Itens
+            cur.execute("SELECT item_name, quantity FROM order_items WHERE order_id = %s", (order_id,))
             items = cur.fetchall()
 
-            # =============================
-            # 3. BUSCAR EVENTOS (HISTÓRICO)
-            # =============================
-            cur.execute(
-                """
+            # Eventos
+            cur.execute("""
                 SELECT event_status, created_at
                 FROM order_events
                 WHERE order_id = %s
                 ORDER BY created_at
-                """,
-                (order_id,)
-            )
+            """, (order_id,))
             events = cur.fetchall()
 
-        # Retorna tudo junto
+        # Também traz o status em tempo real do DynamoDB
+        try:
+            dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
+            realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
+        except Exception:
+            realtime_status = 'unknown'
+
         return {
             "order": order,
             "items": items,
-            "events": events
+            "events": events,
+            "realtime_status": realtime_status
         }
 
     except HTTPException:
