@@ -8,7 +8,6 @@ import boto3
 from datetime import datetime
 from fastapi.staticfiles import StaticFiles
 
-app.mount("/static", StaticFiles(directory="\dijkstrafood\static"), name="static")
 # -------------------------
 # CARREGAR VARIÁVEIS DE AMBIENTE
 # -------------------------
@@ -29,6 +28,15 @@ realtime_table = dynamodb.Table(os.getenv("DYNAMO_TABLE", "OrdersRealtime"))
 # FASTAPI APP
 # -------------------------
 app = FastAPI()
+
+# Corrige o caminho para static files no Windows
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR)  # cria a pasta static se não existir
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # -------------------------
 # FUNÇÃO DE CONEXÃO COM RDS (PostgreSQL)
