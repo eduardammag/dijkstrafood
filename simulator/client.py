@@ -5,7 +5,6 @@ from models import (
     User,
     Courier,
     Restaurant,
-    OrderStatus,
     RequestResult,
 )
 from config import SimulatorConfig
@@ -56,9 +55,21 @@ class ApiClient:
                 response_json=None,
                 error=str(e),
             )
-        
-    # COURIERS
 
+    # USERS
+    def create_user(self, user: User) -> RequestResult:
+        payload = {
+            "user_name": user.user_name,
+            "email": user.email,
+            "phone": user.phone,
+            "latitude": user.latitude,
+            "longitude": user.longitude,
+            "user_type": user.user_type.value,
+        }
+
+        return self._request("POST", "/users", json=payload)
+
+    # COURIERS
     def create_courier(self, courier: Courier) -> RequestResult:
         payload = {
             "user_id": courier.user_id,
@@ -69,7 +80,6 @@ class ApiClient:
         return self._request("POST", "/couriers", json=payload)
 
     # RESTAURANTS
-
     def create_restaurant(self, restaurant: Restaurant) -> RequestResult:
         payload = {
             "restaurant_name": restaurant.restaurant_name,
@@ -82,49 +92,22 @@ class ApiClient:
         return self._request("POST", "/restaurants", json=payload)
 
     # ORDERS
-
     def create_order(
         self,
         client_id: int,
         restaurant_id: int,
-        courier_id: int,
         items: list[dict],
     ) -> RequestResult:
         payload = {
             "client_id": client_id,
             "restaurant_id": restaurant_id,
-            "courier_id": courier_id,
             "items": items,
         }
 
         return self._request("POST", "/orders", json=payload)
 
-    # ORDER EVENTS
+    def get_order(self, order_id: int) -> RequestResult:
+        return self._request("GET", f"/orders/{order_id}")
 
-    def create_order_event(
-        self,
-        order_id: int,
-        status: OrderStatus,
-    ) -> RequestResult:
-        payload = {
-            "order_id": order_id,
-            "event_status": status.value,
-        }
-
-        return self._request("POST", "/order-events", json=payload)
-
-    # LOCATION (FUTURO)
-
-    def send_location(
-        self,
-        courier_id: int,
-        latitude: float,
-        longitude: float,
-    ) -> RequestResult:
-        payload = {
-            "courier_id": courier_id,
-            "latitude": latitude,
-            "longitude": longitude,
-        }
-
-        return self._request("POST", "/couriers/location", json=payload)
+    def get_order_events(self, order_id: int) -> RequestResult:
+        return self._request("GET", f"/orders/{order_id}/events")
