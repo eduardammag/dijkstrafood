@@ -1,57 +1,70 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
-import psycopg2
 import os
 from dotenv import load_dotenv
-import boto3
-from datetime import datetime
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List
+from datetime import datetime
+import psycopg2
+import boto3
+#rodar API uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # -------------------------
-# CARREGAR VARIÁVEIS DE AMBIENTE
+# Carregar variáveis do .env
 # -------------------------
 load_dotenv()
 
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")  # ✅ Necessário para assumed role
+
+DB_HOST = os.getenv("DB_HOST", "SEU_RDS_ENDPOINT")
+DB_NAME = os.getenv("DB_NAME", "dijkstrafood")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "SUA_SENHA")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+
+DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "OrdersRealtime")
+
 # -------------------------
-# CONFIGURAÇÃO AWS DYNAMODB
+# Conexão DynamoDB
 # -------------------------
 dynamodb = boto3.resource(
     'dynamodb',
-    region_name=os.getenv("AWS_REGION", "us-east-1"),
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+    region_name=AWS_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    aws_session_token=AWS_SESSION_TOKEN
 )
-realtime_table = dynamodb.Table(os.getenv("DYNAMO_TABLE", "OrdersRealtime"))
+realtime_table = dynamodb.Table(DYNAMO_TABLE)
 
 # -------------------------
-# FASTAPI APP
+# FastAPI
 # -------------------------
 app = FastAPI()
 
 # Corrige o caminho para static files no Windows
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-
 if not os.path.exists(STATIC_DIR):
-    os.makedirs(STATIC_DIR)  # cria a pasta static se não existir
-
+    os.makedirs(STATIC_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # -------------------------
-# FUNÇÃO DE CONEXÃO COM RDS (PostgreSQL)
+# Função de conexão RDS
 # -------------------------
 def get_connection():
     return psycopg2.connect(
-        host=os.getenv("DB_HOST", "SEU_RDS_ENDPOINT"),
-        database=os.getenv("DB_NAME", "dijkstrafood"),
-        user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD", "SUA_SENHA"),
-        port=os.getenv("DB_PORT", "5432")
+        host=DB_HOST,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        port=DB_PORT
     )
 
 # -------------------------
-# MODELOS DE REQUISIÇÃO
+# Modelos de Requisição
 # -------------------------
 class Item(BaseModel):
     name: str
@@ -66,14 +79,14 @@ class StatusUpdate(BaseModel):
     status: str
 
 # -------------------------
-# HEALTH CHECK
+# Health Check
 # -------------------------
 @app.get("/")
 def health():
     return {"status": "API running"}
 
 # -------------------------
-# CRIAR PEDIDO (RDS + DynamoDB)
+# Criar Pedido
 # -------------------------
 @app.post("/orders")
 def create_order(order: OrderRequest):
@@ -81,7 +94,7 @@ def create_order(order: OrderRequest):
     try:
         with conn:
             with conn.cursor() as cur:
-                # 1. Criar pedido RDS
+                # Criar pedido no RDS
                 cur.execute("""
                     INSERT INTO orders (client_id, restaurant_id, order_status)
                     VALUES (%s, %s, %s)
@@ -89,20 +102,20 @@ def create_order(order: OrderRequest):
                 """, (order.client_id, order.restaurant_id, "pending"))
                 order_id = cur.fetchone()[0]
 
-                # 2. Inserir itens
+                # Inserir itens
                 for item in order.items:
                     cur.execute("""
                         INSERT INTO order_items (order_id, item_name, quantity)
                         VALUES (%s, %s, %s)
                     """, (order_id, item.name, item.quantity))
 
-                # 3. Criar evento inicial
+                # Registrar evento inicial
                 cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
                 """, (order_id, "pending"))
 
-        # 4. Salvar em DynamoDB (tempo real)
+        # Salvar no DynamoDB
         realtime_table.put_item(
             Item={
                 'order_id': str(order_id),
@@ -124,7 +137,7 @@ def create_order(order: OrderRequest):
         conn.close()
 
 # -------------------------
-# ATUALIZAR STATUS DO PEDIDO (RDS + DynamoDB)
+# Atualizar Status do Pedido
 # -------------------------
 @app.put("/orders/{order_id}/status")
 def update_status(order_id: int, body: StatusUpdate):
@@ -142,7 +155,7 @@ def update_status(order_id: int, body: StatusUpdate):
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Order not found")
 
-                # Registrar evento RDS
+                # Registrar evento
                 cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
@@ -172,7 +185,7 @@ def update_status(order_id: int, body: StatusUpdate):
         conn.close()
 
 # -------------------------
-# BUSCAR DETALHES DO PEDIDO
+# Buscar detalhes do pedido
 # -------------------------
 @app.get("/orders/{order_id}")
 def get_order(order_id: int):
@@ -198,7 +211,7 @@ def get_order(order_id: int):
             """, (order_id,))
             events = cur.fetchall()
 
-        # Também traz o status em tempo real do DynamoDB
+        # Status em tempo real do DynamoDB
         try:
             dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
             realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
