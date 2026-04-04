@@ -8,7 +8,7 @@ from datetime import datetime
 import psycopg2
 import boto3
 from contextlib import asynccontextmanager
-
+from decimal import Decimal
 from boto3.dynamodb.conditions import Key
 
 # rodar API:
@@ -88,7 +88,11 @@ def init_db():
         seed_path = os.path.join(BASE_DIR, "..", "database", "seed.sql")
 
         with conn.cursor() as cur:
-
+            print("BASE_DIR:", BASE_DIR)
+            print("Schema path:", schema_path)
+            print("Seed path:", seed_path)
+            print("Schema exists:", os.path.exists(schema_path))
+            print("Seed exists:", os.path.exists(seed_path))
             # Schema
             if os.path.exists(schema_path):
                 try:
@@ -289,8 +293,8 @@ def update_courier_location(courier_id: int, body: CourierLocationUpdate):
             Item={
                 "courier_id": str(courier_id),
                 "timestamp": timestamp,
-                "latitude": body.latitude,
-                "longitude": body.longitude,
+                "latitude": Decimal(str(body.latitude)),
+                "longitude": Decimal(str(body.longitude)),
                 "order_id": str(body.order_id) if body.order_id is not None else "none"
             }
         )
