@@ -1,0 +1,53 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  restaurant-worker:
+    build:
+      context: .
+      dockerfile: restaurant-worker/Dockerfile
+    container_name: restaurant-worker
+    environment:
+      BROKER_HOST: rabbitmq
+      BROKER_PORT: 5672
+      BROKER_USER: guest
+      BROKER_PASSWORD: guest
+      BROKER_EXCHANGE: dijkfood
+      RESTAURANT_ID: rest_1
+      PREP_TIME_SECONDS: 5
+    depends_on:
+      - rabbitmq
+
+  courier-worker:
+    build:
+      context: .
+      dockerfile: courier-worker/Dockerfile
+    container_name: courier-worker
+    environment:
+      BROKER_HOST: rabbitmq
+      BROKER_PORT: 5672
+      BROKER_USER: guest
+      BROKER_PASSWORD: guest
+      BROKER_EXCHANGE: dijkfood
+      COURIER_ID: courier_1
+      POSITION_INTERVAL_SECONDS: 1
+    depends_on:
+      - rabbitmq
+
+  test-publisher:
+    build:
+      context: .
+      dockerfile: test-publisher/Dockerfile
+    container_name: test-publisher
+    environment:
+      BROKER_HOST: rabbitmq
+      BROKER_PORT: 5672
+      BROKER_USER: guest
+      BROKER_PASSWORD: guest
+      BROKER_EXCHANGE: dijkfood
+    depends_on:
+      - rabbitmq
