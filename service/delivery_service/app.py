@@ -5,7 +5,7 @@ import requests
 
 from matcher import mapear_entregadores, encontrar_entregador
 from tracking import simular_movimento
-from routing.graph import carregar_grafo
+from routing_service.graph import carregar_grafo
 from utils import gerar_rota_simples, filtrar_entregadores
 
 app = FastAPI()
