@@ -13,7 +13,12 @@ from contextlib import asynccontextmanager
 # uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # -------------------------
-# Carregar variáveis do .env
+# CONFIG
+# -------------------------
+USE_DYNAMO = True  # 🔥 MUDE PARA False se quiser desligar o Dynamo
+
+# -------------------------
+# Carregar variáveis
 # -------------------------
 load_dotenv()
 
@@ -31,17 +36,21 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "OrdersRealtime")
 
 # -------------------------
-# Conexão DynamoDB
+# DynamoDB (seguro)
 # -------------------------
-dynamodb = boto3.resource(
-    'dynamodb',
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    aws_session_token=AWS_SESSION_TOKEN
-)
-
-realtime_table = dynamodb.Table(DYNAMO_TABLE)
+if USE_DYNAMO:
+    try:
+        dynamodb = boto3.resource(
+            'dynamodb',
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            aws_session_token=AWS_SESSION_TOKEN
+        )
+        realtime_table = dynamodb.Table(DYNAMO_TABLE)
+    except Exception as e:
+        print("⚠️ DynamoDB não disponível:", e)
+        USE_DYNAMO = False
 
 # -------------------------
 # Caminhos
@@ -66,50 +75,43 @@ def get_connection():
     )
 
 # -------------------------
-# 🔥 EXECUTAR SCHEMA.SQL
-
+# INIT DB (schema + seed)
+# -------------------------
 def init_db():
     try:
         conn = get_connection()
         conn.autocommit = True
 
-        schema_path = "database\squema.sql"
-        seed_path = "database\seed.sql"
+        schema_path = os.path.join(BASE_DIR, "..", "database", "schema.sql")
+        seed_path = os.path.join(BASE_DIR, "..", "database", "seed.sql")
 
         with conn.cursor() as cur:
 
-            # -------------------------
-            # Rodar schema.sql
-            # -------------------------
+            # Schema
             if os.path.exists(schema_path):
-                with open(schema_path, "r", encoding="utf-8") as f:
-                    cur.execute(f.read())
-                print("✅ Schema criado")
-            else:
-                print("⚠️ schema.sql não encontrado")
+                try:
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        cur.execute(f.read())
+                    print("✅ Schema carregado")
+                except Exception as e:
+                    print("⚠️ Schema já existe (ok):", e)
 
-            # -------------------------
-            # Rodar seed.sql
-            # -------------------------
+            # Seed
             if os.path.exists(seed_path):
-                with open(seed_path, "r", encoding="utf-8") as f:
-                    cur.execute(f.read())
-                print("✅ Dados inseridos (seed)")
-            else:
-                print("⚠️ seed.sql não encontrado")
+                try:
+                    with open(seed_path, "r", encoding="utf-8") as f:
+                        cur.execute(f.read())
+                    print("✅ Seed inserido")
+                except Exception as e:
+                    print("⚠️ Seed já inserido (ok):", e)
 
         conn.close()
 
     except Exception as e:
         print("❌ Erro ao inicializar banco:", e)
 
-
-
-
-
-
 # -------------------------
-# ✅ LIFESPAN (NOVO PADRÃO)
+# LIFESPAN
 # -------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -126,7 +128,7 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # -------------------------
-# Modelos
+# MODELOS
 # -------------------------
 class Item(BaseModel):
     name: str
@@ -141,7 +143,7 @@ class StatusUpdate(BaseModel):
     status: str
 
 # -------------------------
-# Health Check
+# Health
 # -------------------------
 @app.get("/")
 def health():
@@ -175,22 +177,26 @@ def create_order(order: OrderRequest):
                     VALUES (%s, %s)
                 """, (order_id, "pending"))
 
-        realtime_table.put_item(
-            Item={
-                'order_id': str(order_id),
-                'client_id': str(order.client_id),
-                'restaurant_id': str(order.restaurant_id),
-                'status': 'pending',
-                'updated_at': datetime.utcnow().isoformat(),
-                'items': [{'name': i.name, 'quantity': i.quantity} for i in order.items]
-            }
-        )
+        # 🔥 Dynamo seguro
+        if USE_DYNAMO:
+            try:
+                realtime_table.put_item(
+                    Item={
+                        'order_id': str(order_id),
+                        'client_id': str(order.client_id),
+                        'restaurant_id': str(order.restaurant_id),
+                        'status': 'pending',
+                        'updated_at': datetime.utcnow().isoformat(),
+                        'items': [{'name': i.name, 'quantity': i.quantity} for i in order.items]
+                    }
+                )
+            except Exception as e:
+                print("⚠️ Dynamo erro:", e)
 
         return {"message": "Order created successfully", "order_id": order_id}
 
     except Exception as e:
-        if conn:
-            conn.rollback()
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
@@ -219,15 +225,19 @@ def update_status(order_id: int, body: StatusUpdate):
                     VALUES (%s, %s)
                 """, (order_id, body.status))
 
-        realtime_table.update_item(
-            Key={'order_id': str(order_id)},
-            UpdateExpression="SET #s = :status, updated_at = :now",
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={
-                ':status': body.status,
-                ':now': datetime.utcnow().isoformat()
-            }
-        )
+        if USE_DYNAMO:
+            try:
+                realtime_table.update_item(
+                    Key={'order_id': str(order_id)},
+                    UpdateExpression="SET #s = :status, updated_at = :now",
+                    ExpressionAttributeNames={'#s': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': body.status,
+                        ':now': datetime.utcnow().isoformat()
+                    }
+                )
+            except Exception as e:
+                print("⚠️ Dynamo erro:", e)
 
         return {"message": "Status updated"}
 
@@ -235,8 +245,7 @@ def update_status(order_id: int, body: StatusUpdate):
         raise
 
     except Exception as e:
-        if conn:
-            conn.rollback()
+        conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
@@ -267,11 +276,14 @@ def get_order(order_id: int):
             """, (order_id,))
             events = cur.fetchall()
 
-        try:
-            dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
-            realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
-        except Exception:
-            realtime_status = 'unknown'
+        realtime_status = "from_rds"
+
+        if USE_DYNAMO:
+            try:
+                dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
+                realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
+            except Exception:
+                realtime_status = "from_rds"
 
         return {
             "order": order,
