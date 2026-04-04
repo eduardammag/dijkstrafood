@@ -7,7 +7,10 @@ from typing import List
 from datetime import datetime
 import psycopg2
 import boto3
-#rodar API uvicorn main:app --reload --host 0.0.0.0 --port 8000
+from contextlib import asynccontextmanager
+
+# rodar API:
+# uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # -------------------------
 # Carregar variáveis do .env
@@ -17,7 +20,7 @@ load_dotenv()
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")  # ✅ Necessário para assumed role
+AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")
 
 DB_HOST = os.getenv("DB_HOST", "SEU_RDS_ENDPOINT")
 DB_NAME = os.getenv("DB_NAME", "dijkstrafood")
@@ -37,22 +40,20 @@ dynamodb = boto3.resource(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     aws_session_token=AWS_SESSION_TOKEN
 )
+
 realtime_table = dynamodb.Table(DYNAMO_TABLE)
 
 # -------------------------
-# FastAPI
+# Caminhos
 # -------------------------
-app = FastAPI()
-
-# Corrige o caminho para static files no Windows
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+
 if not os.path.exists(STATIC_DIR):
     os.makedirs(STATIC_DIR)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # -------------------------
-# Função de conexão RDS
+# Conexão RDS
 # -------------------------
 def get_connection():
     return psycopg2.connect(
@@ -60,11 +61,72 @@ def get_connection():
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD,
-        port=DB_PORT
+        port=DB_PORT,
+        sslmode="require"
     )
 
 # -------------------------
-# Modelos de Requisição
+# 🔥 EXECUTAR SCHEMA.SQL
+
+def init_db():
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+
+        schema_path = "database\squema.sql"
+        seed_path = "database\seed.sql"
+
+        with conn.cursor() as cur:
+
+            # -------------------------
+            # Rodar schema.sql
+            # -------------------------
+            if os.path.exists(schema_path):
+                with open(schema_path, "r", encoding="utf-8") as f:
+                    cur.execute(f.read())
+                print("✅ Schema criado")
+            else:
+                print("⚠️ schema.sql não encontrado")
+
+            # -------------------------
+            # Rodar seed.sql
+            # -------------------------
+            if os.path.exists(seed_path):
+                with open(seed_path, "r", encoding="utf-8") as f:
+                    cur.execute(f.read())
+                print("✅ Dados inseridos (seed)")
+            else:
+                print("⚠️ seed.sql não encontrado")
+
+        conn.close()
+
+    except Exception as e:
+        print("❌ Erro ao inicializar banco:", e)
+
+
+
+
+
+
+# -------------------------
+# ✅ LIFESPAN (NOVO PADRÃO)
+# -------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Iniciando aplicação...")
+    init_db()
+    yield
+    print("🛑 Encerrando aplicação...")
+
+# -------------------------
+# FastAPI
+# -------------------------
+app = FastAPI(lifespan=lifespan)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# -------------------------
+# Modelos
 # -------------------------
 class Item(BaseModel):
     name: str
@@ -94,28 +156,25 @@ def create_order(order: OrderRequest):
     try:
         with conn:
             with conn.cursor() as cur:
-                # Criar pedido no RDS
                 cur.execute("""
                     INSERT INTO orders (client_id, restaurant_id, order_status)
                     VALUES (%s, %s, %s)
                     RETURNING order_id
                 """, (order.client_id, order.restaurant_id, "pending"))
+
                 order_id = cur.fetchone()[0]
 
-                # Inserir itens
                 for item in order.items:
                     cur.execute("""
                         INSERT INTO order_items (order_id, item_name, quantity)
                         VALUES (%s, %s, %s)
                     """, (order_id, item.name, item.quantity))
 
-                # Registrar evento inicial
                 cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
                 """, (order_id, "pending"))
 
-        # Salvar no DynamoDB
         realtime_table.put_item(
             Item={
                 'order_id': str(order_id),
@@ -130,14 +189,15 @@ def create_order(order: OrderRequest):
         return {"message": "Order created successfully", "order_id": order_id}
 
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         conn.close()
 
 # -------------------------
-# Atualizar Status do Pedido
+# Atualizar Status
 # -------------------------
 @app.put("/orders/{order_id}/status")
 def update_status(order_id: int, body: StatusUpdate):
@@ -145,7 +205,6 @@ def update_status(order_id: int, body: StatusUpdate):
     try:
         with conn:
             with conn.cursor() as cur:
-                # Atualizar RDS
                 cur.execute("""
                     UPDATE orders
                     SET order_status = %s
@@ -155,13 +214,11 @@ def update_status(order_id: int, body: StatusUpdate):
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Order not found")
 
-                # Registrar evento
                 cur.execute("""
                     INSERT INTO order_events (order_id, event_status)
                     VALUES (%s, %s)
                 """, (order_id, body.status))
 
-        # Atualizar DynamoDB
         realtime_table.update_item(
             Key={'order_id': str(order_id)},
             UpdateExpression="SET #s = :status, updated_at = :now",
@@ -178,31 +235,30 @@ def update_status(order_id: int, body: StatusUpdate):
         raise
 
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         conn.close()
 
 # -------------------------
-# Buscar detalhes do pedido
+# Buscar Pedido
 # -------------------------
 @app.get("/orders/{order_id}")
 def get_order(order_id: int):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            # Pedido
             cur.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
             order = cur.fetchone()
+
             if not order:
                 raise HTTPException(status_code=404, detail="Order not found")
 
-            # Itens
             cur.execute("SELECT item_name, quantity FROM order_items WHERE order_id = %s", (order_id,))
             items = cur.fetchall()
 
-            # Eventos
             cur.execute("""
                 SELECT event_status, created_at
                 FROM order_events
@@ -211,7 +267,6 @@ def get_order(order_id: int):
             """, (order_id,))
             events = cur.fetchall()
 
-        # Status em tempo real do DynamoDB
         try:
             dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
             realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
