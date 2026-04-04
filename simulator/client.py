@@ -15,7 +15,6 @@ class ApiClient:
         self.base_url = config.api.base_url
         self.timeout = config.api.timeout_seconds
 
-    # INTERNAL REQUEST METHOD
     def _request(self, method: str, path: str, json=None) -> RequestResult:
         url = f"{self.base_url}{path}"
 
@@ -66,7 +65,6 @@ class ApiClient:
             "longitude": user.longitude,
             "user_type": user.user_type.value,
         }
-
         return self._request("POST", "/users", json=payload)
 
     # COURIERS
@@ -76,7 +74,6 @@ class ApiClient:
             "vehicle_type": courier.vehicle_type,
             "is_available": courier.is_available,
         }
-
         return self._request("POST", "/couriers", json=payload)
 
     # RESTAURANTS
@@ -88,7 +85,6 @@ class ApiClient:
             "restaurant_longitude": restaurant.restaurant_longitude,
             "creator_user_id": restaurant.creator_user_id,
         }
-
         return self._request("POST", "/restaurants", json=payload)
 
     # ORDERS
@@ -101,13 +97,9 @@ class ApiClient:
         payload = {
             "client_id": client_id,
             "restaurant_id": restaurant_id,
-            "items": items,
+            "items": items,  # cada item precisa ser {"name": ..., "quantity": ...}
         }
-
         return self._request("POST", "/orders", json=payload)
 
     def get_order(self, order_id: int) -> RequestResult:
         return self._request("GET", f"/orders/{order_id}")
-
-    def get_order_events(self, order_id: int) -> RequestResult:
-        return self._request("GET", f"/orders/{order_id}/events")

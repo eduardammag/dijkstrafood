@@ -20,8 +20,8 @@ class WorkflowResult:
     order_id: Optional[int]
     created_order: RequestResult
     order_queries: list[RequestResult]
-    event_queries: list[RequestResult]
     final_status: Optional[str] = None
+    observed_events: Optional[list] = None
     error: Optional[str] = None
 
 
@@ -40,10 +40,13 @@ class OrderWorkflow:
         if self.metrics_callback is not None:
             self.metrics_callback(endpoint_name, result)
 
-    async def _observe_order(self, order_id: int) -> tuple[list[RequestResult], list[RequestResult], Optional[str]]:
+    async def _observe_order(
+        self,
+        order_id: int,
+    ) -> tuple[list[RequestResult], Optional[str], Optional[list]]:
         order_results: list[RequestResult] = []
-        event_results: list[RequestResult] = []
         final_status: Optional[str] = None
+        observed_events: Optional[list] = None
 
         max_attempts = 10
         interval_seconds = 1.0
@@ -54,20 +57,20 @@ class OrderWorkflow:
             order_results.append(order_result)
 
             if order_result.success and order_result.response_json:
-                final_status = order_result.response_json.get("order_status")
-                if final_status == "DELIVERED":
-                    events_result = self.api_client.get_order_events(order_id)
-                    self._record("GET /orders/{id}/events", events_result)
-                    event_results.append(events_result)
-                    break
+                response_data = order_result.response_json
 
-            events_result = self.api_client.get_order_events(order_id)
-            self._record("GET /orders/{id}/events", events_result)
-            event_results.append(events_result)
+                # status em tempo real vem como realtime_status nessa API
+                final_status = response_data.get("realtime_status")
+
+                # eventos vêm embutidos dentro do GET /orders/{id}
+                observed_events = response_data.get("events")
+
+                if final_status == "DELIVERED":
+                    break
 
             await asyncio.sleep(interval_seconds)
 
-        return order_results, event_results, final_status
+        return order_results, final_status, observed_events
 
     async def run(self, context: WorkflowContext) -> WorkflowResult:
         items = build_order_items_for_restaurant(context.restaurant.cuisine_type)
@@ -85,8 +88,8 @@ class OrderWorkflow:
                 order_id=None,
                 created_order=create_order_result,
                 order_queries=[],
-                event_queries=[],
                 final_status=None,
+                observed_events=None,
                 error="failed_to_create_order",
             )
 
@@ -96,8 +99,8 @@ class OrderWorkflow:
                 order_id=None,
                 created_order=create_order_result,
                 order_queries=[],
-                event_queries=[],
                 final_status=None,
+                observed_events=None,
                 error="missing_order_response_json",
             )
 
@@ -108,19 +111,19 @@ class OrderWorkflow:
                 order_id=None,
                 created_order=create_order_result,
                 order_queries=[],
-                event_queries=[],
                 final_status=None,
+                observed_events=None,
                 error="missing_order_id",
             )
 
-        order_queries, event_queries, final_status = await self._observe_order(order_id)
+        order_queries, final_status, observed_events = await self._observe_order(order_id)
 
         return WorkflowResult(
             success=True,
             order_id=order_id,
             created_order=create_order_result,
             order_queries=order_queries,
-            event_queries=event_queries,
             final_status=final_status,
+            observed_events=observed_events,
             error=None,
         )

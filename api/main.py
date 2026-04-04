@@ -9,6 +9,8 @@ import psycopg2
 import boto3
 from contextlib import asynccontextmanager
 
+from boto3.dynamodb.conditions import Key
+
 # rodar API:
 # uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
@@ -33,7 +35,7 @@ DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "SUA_SENHA")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 
-DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "OrdersRealtime")
+DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
 
 # -------------------------
 # DynamoDB (seguro)
@@ -142,6 +144,10 @@ class OrderRequest(BaseModel):
 class StatusUpdate(BaseModel):
     status: str
 
+class CourierLocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+    order_id: int | None = None
 # -------------------------
 # Health
 # -------------------------
@@ -177,21 +183,7 @@ def create_order(order: OrderRequest):
                     VALUES (%s, %s)
                 """, (order_id, "pending"))
 
-        # 🔥 Dynamo seguro
-        if USE_DYNAMO:
-            try:
-                realtime_table.put_item(
-                    Item={
-                        'order_id': str(order_id),
-                        'client_id': str(order.client_id),
-                        'restaurant_id': str(order.restaurant_id),
-                        'status': 'pending',
-                        'updated_at': datetime.utcnow().isoformat(),
-                        'items': [{'name': i.name, 'quantity': i.quantity} for i in order.items]
-                    }
-                )
-            except Exception as e:
-                print("⚠️ Dynamo erro:", e)
+        
 
         return {"message": "Order created successfully", "order_id": order_id}
 
@@ -225,19 +217,7 @@ def update_status(order_id: int, body: StatusUpdate):
                     VALUES (%s, %s)
                 """, (order_id, body.status))
 
-        if USE_DYNAMO:
-            try:
-                realtime_table.update_item(
-                    Key={'order_id': str(order_id)},
-                    UpdateExpression="SET #s = :status, updated_at = :now",
-                    ExpressionAttributeNames={'#s': 'status'},
-                    ExpressionAttributeValues={
-                        ':status': body.status,
-                        ':now': datetime.utcnow().isoformat()
-                    }
-                )
-            except Exception as e:
-                print("⚠️ Dynamo erro:", e)
+
 
         return {"message": "Status updated"}
 
@@ -276,20 +256,14 @@ def get_order(order_id: int):
             """, (order_id,))
             events = cur.fetchall()
 
-        realtime_status = "from_rds"
 
-        if USE_DYNAMO:
-            try:
-                dynamo_item = realtime_table.get_item(Key={'order_id': str(order_id)})
-                realtime_status = dynamo_item.get('Item', {}).get('status', 'unknown')
-            except Exception:
-                realtime_status = "from_rds"
+
 
         return {
             "order": order,
             "items": items,
             "events": events,
-            "realtime_status": realtime_status
+
         }
 
     except HTTPException:
@@ -300,3 +274,54 @@ def get_order(order_id: int):
 
     finally:
         conn.close()
+
+
+# LOCALIZAÇÃO DO ENTREGADOR
+@app.post("/couriers/{courier_id}/location")
+def update_courier_location(courier_id: int, body: CourierLocationUpdate):
+    if not USE_DYNAMO:
+        raise HTTPException(status_code=503, detail="DynamoDB disabled")
+
+    try:
+        timestamp = datetime.utcnow().isoformat()
+
+        realtime_table.put_item(
+            Item={
+                "courier_id": str(courier_id),
+                "timestamp": timestamp,
+                "latitude": body.latitude,
+                "longitude": body.longitude,
+                "order_id": str(body.order_id) if body.order_id is not None else "none"
+            }
+        )
+
+        return {"message": "Location updated", "timestamp": timestamp}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/couriers/{courier_id}/location")
+def get_latest_courier_location(courier_id: int):
+    if not USE_DYNAMO:
+        raise HTTPException(status_code=503, detail="DynamoDB disabled")
+
+    try:
+        response = realtime_table.query(
+            KeyConditionExpression=Key("courier_id").eq(str(courier_id)),
+            ScanIndexForward=False,
+            Limit=1
+        )
+
+        items = response.get("Items", [])
+        if not items:
+            raise HTTPException(status_code=404, detail="Location not found")
+
+        return items[0]
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
