@@ -12,13 +12,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from decimal import Decimal
 
-from broker import (
+from .broker import (
     publish_new_order,
     publish_ready_for_delivery,
     publish_delivery_assignment,
 )
 
 load_dotenv()
+
+print("AWS_REGION:", os.getenv("AWS_REGION"))
+print("DYNAMO_TABLE:", os.getenv("DYNAMO_TABLE"))
+print("USE_DYNAMO:", os.getenv("USE_DYNAMO"))
+print("AWS_ACCESS_KEY_ID prefix:", (os.getenv("AWS_ACCESS_KEY_ID") or "")[:6])
+print("AWS_SESSION_TOKEN exists:", os.getenv("AWS_SESSION_TOKEN") is not None)
 
 USE_DYNAMO = os.getenv("USE_DYNAMO", "true").lower() == "true"
 
