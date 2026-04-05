@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from typing import List, Optional
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 import boto3
 import psycopg2
@@ -10,7 +11,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from decimal import Decimal
 
 from .broker import (
     publish_new_order,
@@ -18,14 +18,18 @@ from .broker import (
     publish_delivery_assignment,
 )
 
-load_dotenv()
+# -------------------------
+# Paths + .env
+# -------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-print("AWS_REGION:", os.getenv("AWS_REGION"))
-print("DYNAMO_TABLE:", os.getenv("DYNAMO_TABLE"))
-print("USE_DYNAMO:", os.getenv("USE_DYNAMO"))
-print("AWS_ACCESS_KEY_ID prefix:", (os.getenv("AWS_ACCESS_KEY_ID") or "")[:6])
-print("AWS_SESSION_TOKEN exists:", os.getenv("AWS_SESSION_TOKEN") is not None)
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
+# -------------------------
+# Config
+# -------------------------
 USE_DYNAMO = os.getenv("USE_DYNAMO", "true").lower() == "true"
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -38,13 +42,20 @@ DB_NAME = os.getenv("DB_NAME", "dijkstrafood")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_SSLMODE = os.getenv("DB_SSLMODE", "prefer")
 
 DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-os.makedirs(STATIC_DIR, exist_ok=True)
+print("AWS_REGION:", AWS_REGION)
+print("DYNAMO_TABLE:", DYNAMO_TABLE)
+print("USE_DYNAMO:", USE_DYNAMO)
+print("AWS_ACCESS_KEY_ID prefix:", (AWS_ACCESS_KEY_ID or "")[:6])
+print("AWS_SESSION_TOKEN exists:", AWS_SESSION_TOKEN is not None)
 
+# -------------------------
+# DynamoDB
+# -------------------------
+aws_session = None
 dynamodb = None
 realtime_table = None
 
@@ -54,7 +65,7 @@ if USE_DYNAMO:
             aws_access_key_id=AWS_ACCESS_KEY_ID,
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
             aws_session_token=AWS_SESSION_TOKEN,
-            region_name=AWS_REGION
+            region_name=AWS_REGION,
         )
 
         sts = aws_session.client("sts")
@@ -71,7 +82,9 @@ if USE_DYNAMO:
         print("DynamoDB não disponível:", repr(e))
         USE_DYNAMO = False
 
-
+# -------------------------
+# DB
+# -------------------------
 def get_connection():
     return psycopg2.connect(
         host=DB_HOST,
@@ -79,7 +92,7 @@ def get_connection():
         user=DB_USER,
         password=DB_PASSWORD,
         port=DB_PORT,
-        sslmode=os.getenv("DB_SSLMODE", "prefer"),
+        sslmode=DB_SSLMODE,
     )
 
 
@@ -89,27 +102,40 @@ def init_db():
         conn = get_connection()
         conn.autocommit = True
 
-        squema_path = os.path.join(BASE_DIR, "database", "squema.sql")
-        seed_path = os.path.join(BASE_DIR, "database", "seed.sql")
+        schema_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "database", "schema.sql"))
+        seed_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "database", "seed.sql"))
+
+        print("BASE_DIR:", BASE_DIR)
+        print("Schema path:", schema_path)
+        print("Seed path:", seed_path)
+        print("Schema exists:", os.path.exists(schema_path))
+        print("Seed exists:", os.path.exists(seed_path))
 
         with conn.cursor() as cur:
-            if os.path.exists(squema_path):
-                with open(squema_path, "r", encoding="utf-8") as f:
-                    cur.execute(f.read())
-                print("squema carregado")
+            if os.path.exists(schema_path):
+                try:
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        cur.execute(f.read())
+                    print("✅ Schema carregado")
+                except Exception as e:
+                    print("⚠️ Schema já existe (ok):", e)
             else:
-                print("squema.sql não encontrado")
+                print("❌ schema.sql não encontrado")
 
             if os.path.exists(seed_path):
-                with open(seed_path, "r", encoding="utf-8") as f:
-                    sql = f.read().strip()
-                    if sql:
-                        cur.execute(sql)
-                print("Seed carregado")
+                try:
+                    with open(seed_path, "r", encoding="utf-8") as f:
+                        sql = f.read().strip()
+                        if sql:
+                            cur.execute(sql)
+                    print("✅ Seed inserido")
+                except Exception as e:
+                    print("⚠️ Seed já inserido (ok):", e)
             else:
-                print("seed.sql não encontrado")
+                print("❌ seed.sql não encontrado")
+
     except Exception as e:
-        print("Erro ao inicializar banco:", e)
+        print("❌ Erro ao inicializar banco:", e)
     finally:
         if conn:
             conn.close()
@@ -117,14 +143,18 @@ def init_db():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("🚀 Iniciando aplicação...")
     init_db()
     yield
+    print("🛑 Encerrando aplicação...")
 
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-
+# -------------------------
+# Models
+# -------------------------
 class Item(BaseModel):
     name: str
     quantity: int
@@ -152,6 +182,31 @@ class AssignCourierRequest(BaseModel):
     route_to_delivery: List[List[float]]
 
 
+class UserCreate(BaseModel):
+    user_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    user_type: str
+
+
+class RestaurantCreate(BaseModel):
+    restaurant_name: str
+    cuisine_type: Optional[str] = None
+    restaurant_latitude: Optional[float] = None
+    restaurant_longitude: Optional[float] = None
+    creator_user_id: int
+
+
+class CourierCreate(BaseModel):
+    user_id: int
+    vehicle_type: Optional[str] = None
+    is_available: bool = True
+
+# -------------------------
+# Serializers
+# -------------------------
 def serialize_order_row(row):
     return {
         "order_id": row[0],
@@ -172,10 +227,122 @@ def serialize_events(rows):
         for r in rows
     ]
 
-
+# -------------------------
+# Routes
+# -------------------------
 @app.get("/")
 def health():
     return {"status": "API running"}
+
+
+@app.post("/users")
+def create_user(user: UserCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (
+                        user_name,
+                        email,
+                        phone,
+                        latitude,
+                        longitude,
+                        user_type
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING user_id
+                    """,
+                    (
+                        user.user_name,
+                        user.email,
+                        user.phone,
+                        user.latitude,
+                        user.longitude,
+                        user.user_type,
+                    ),
+                )
+                user_id = cur.fetchone()[0]
+
+        return {
+            "message": "User created successfully",
+            "user_id": user_id,
+        }
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/restaurants")
+def create_restaurant(restaurant: RestaurantCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO restaurants (
+                        restaurant_name,
+                        cuisine_type,
+                        restaurant_latitude,
+                        restaurant_longitude,
+                        creator_user_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING restaurant_id
+                    """,
+                    (
+                        restaurant.restaurant_name,
+                        restaurant.cuisine_type,
+                        restaurant.restaurant_latitude,
+                        restaurant.restaurant_longitude,
+                        restaurant.creator_user_id,
+                    ),
+                )
+                restaurant_id = cur.fetchone()[0]
+
+        return {
+            "message": "Restaurant created successfully",
+            "restaurant_id": restaurant_id,
+        }
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/couriers")
+def create_courier(courier: CourierCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO couriers (
+                        user_id,
+                        vehicle_type,
+                        is_available
+                    )
+                    VALUES (%s, %s, %s)
+                    """,
+                    (
+                        courier.user_id,
+                        courier.vehicle_type,
+                        courier.is_available,
+                    ),
+                )
+
+        return {"message": "Courier created successfully"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 
 @app.post("/orders")
@@ -327,6 +494,32 @@ def get_order(order_id: int):
         conn.close()
 
 
+@app.get("/orders/{order_id}/events")
+def get_order_events(order_id: int):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT event_status, created_at
+                FROM order_events
+                WHERE order_id = %s
+                ORDER BY created_at
+                """,
+                (order_id,),
+            )
+            events = cur.fetchall()
+
+        return {
+            "order_id": order_id,
+            "events": serialize_events(events),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 @app.get("/orders/{order_id}/dispatch-data")
 def get_order_dispatch_data(order_id: int):
     conn = get_connection()
@@ -433,18 +626,12 @@ def assign_courier(order_id: int, body: AssignCourierRequest):
         conn.close()
 
 
-from decimal import Decimal
-
 @app.post("/couriers/{courier_id}/location")
 def update_courier_location(courier_id: int, body: CourierLocationUpdate):
     if not USE_DYNAMO:
         raise HTTPException(status_code=503, detail="DynamoDB disabled")
 
     try:
-        sts = aws_session.client("sts")
-        identity = sts.get_caller_identity()
-        print("AWS caller identity no POST location:", identity)
-
         timestamp = datetime.utcnow().isoformat()
 
         realtime_table.put_item(
@@ -453,15 +640,14 @@ def update_courier_location(courier_id: int, body: CourierLocationUpdate):
                 "timestamp": timestamp,
                 "latitude": Decimal(str(body.latitude)),
                 "longitude": Decimal(str(body.longitude)),
-                "order_id": str(body.order_id) if body.order_id is not None else "none"
+                "order_id": str(body.order_id) if body.order_id is not None else "none",
             }
         )
 
         return {
             "message": "Location updated",
-            "timestamp": timestamp
+            "timestamp": timestamp,
         }
-
     except Exception as e:
         print("Erro ao salvar localização no DynamoDB:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
