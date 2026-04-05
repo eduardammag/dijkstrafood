@@ -37,14 +37,12 @@ class LoadRunner:
         metrics: MetricsCollector,
         clients: List[User],
         restaurants: List[Restaurant],
-        courier_user_ids: List[int],
     ):
         self.config = config
         self.api_client = api_client
         self.metrics = metrics
         self.clients = clients
         self.restaurants = restaurants
-        self.courier_user_ids = courier_user_ids
 
         self.workflow = OrderWorkflow(
             api_client=self.api_client,
@@ -52,7 +50,6 @@ class LoadRunner:
             metrics_callback=self.metrics.record,
         )
 
-        self._courier_index = 0
         self._client_index = 0
         self._restaurant_index = 0
 
@@ -66,20 +63,13 @@ class LoadRunner:
         self._restaurant_index += 1
         return restaurant
 
-    def _next_courier_user_id(self) -> int:
-        courier_user_id = self.courier_user_ids[self._courier_index % len(self.courier_user_ids)]
-        self._courier_index += 1
-        return courier_user_id
-
     async def _run_single_order(self) -> WorkflowResult:
         client = self._next_client()
         restaurant = self._next_restaurant()
-        courier_user_id = self._next_courier_user_id()
 
         context = WorkflowContext(
-            client=client,
+            customer=client,
             restaurant=restaurant,
-            courier_user_id=courier_user_id,
         )
 
         return await self.workflow.run(context)

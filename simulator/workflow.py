@@ -59,11 +59,11 @@ class OrderWorkflow:
             if order_result.success and order_result.response_json:
                 response_data = order_result.response_json
 
-                # status em tempo real vem como realtime_status nessa API
-                final_status = response_data.get("realtime_status")
-
-                # eventos vêm embutidos dentro do GET /orders/{id}
                 observed_events = response_data.get("events")
+
+                order_data = response_data.get("order")
+                if order_data and isinstance(order_data, (list, tuple)) and len(order_data) >= 5:
+                    final_status = order_data[4]
 
                 if final_status == "DELIVERED":
                     break

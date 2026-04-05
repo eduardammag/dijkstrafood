@@ -188,7 +188,6 @@ async def async_main(scenario_name: str) -> None:
         metrics=metrics,
         clients=clients,
         restaurants=restaurants,
-        courier_user_ids=courier_user_ids,
     )
 
     load_test_result = await runner.run()
