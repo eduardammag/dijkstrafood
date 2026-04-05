@@ -59,8 +59,8 @@ try:
         GroupId=sg_id,
         IpPermissions=[{
             "IpProtocol": "tcp",
-            "FromPort": 3306,
-            "ToPort": 3306,
+            "FromPort": 5432,
+            "ToPort": 5432,
             "IpRanges": [{"CidrIp": f"{ip}/32"}]
         }]
     )
