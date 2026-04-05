@@ -152,6 +152,31 @@ class CourierLocationUpdate(BaseModel):
     latitude: float
     longitude: float
     order_id: int | None = None
+
+
+class UserCreate(BaseModel):
+    user_name: str
+    email: str | None = None
+    phone: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    user_type: str
+
+
+class RestaurantCreate(BaseModel):
+    restaurant_name: str
+    cuisine_type: str | None = None
+    restaurant_latitude: float | None = None
+    restaurant_longitude: float | None = None
+    creator_user_id: int
+
+
+class CourierCreate(BaseModel):
+    user_id: int
+    vehicle_type: str | None = None
+    is_available: bool = True
+
+
 # -------------------------
 # Health
 # -------------------------
@@ -159,9 +184,118 @@ class CourierLocationUpdate(BaseModel):
 def health():
     return {"status": "API running"}
 
-# -------------------------
+
+# Criar usuário
+@app.post("/users")
+def create_user(user: UserCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (
+                        user_name,
+                        email,
+                        phone,
+                        latitude,
+                        longitude,
+                        user_type
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING user_id
+                """, (
+                    user.user_name,
+                    user.email,
+                    user.phone,
+                    user.latitude,
+                    user.longitude,
+                    user.user_type
+                ))
+
+                user_id = cur.fetchone()[0]
+
+        return {
+            "message": "User created successfully",
+            "user_id": user_id
+        }
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
+
+#Criar restaurante
+@app.post("/restaurants")
+def create_restaurant(restaurant: RestaurantCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO restaurants (
+                        restaurant_name,
+                        cuisine_type,
+                        restaurant_latitude,
+                        restaurant_longitude,
+                        creator_user_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING restaurant_id
+                """, (
+                    restaurant.restaurant_name,
+                    restaurant.cuisine_type,
+                    restaurant.restaurant_latitude,
+                    restaurant.restaurant_longitude,
+                    restaurant.creator_user_id
+                ))
+
+                restaurant_id = cur.fetchone()[0]
+
+        return {
+            "message": "Restaurant created successfully",
+            "restaurant_id": restaurant_id
+        }
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
+
+#Criar entregador
+@app.post("/couriers")
+def create_courier(courier: CourierCreate):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO couriers (
+                        user_id,
+                        vehicle_type,
+                        is_available
+                    )
+                    VALUES (%s, %s, %s)
+                """, (
+                    courier.user_id,
+                    courier.vehicle_type,
+                    courier.is_available
+                ))
+
+        return {"message": "Courier created successfully"}
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
+
+
 # Criar Pedido
-# -------------------------
 @app.post("/orders")
 def create_order(order: OrderRequest):
     conn = get_connection()
@@ -198,9 +332,8 @@ def create_order(order: OrderRequest):
     finally:
         conn.close()
 
-# -------------------------
+
 # Atualizar Status
-# -------------------------
 @app.put("/orders/{order_id}/status")
 def update_status(order_id: int, body: StatusUpdate):
     conn = get_connection()
@@ -279,6 +412,31 @@ def get_order(order_id: int):
     finally:
         conn.close()
 
+
+#Buscar order event
+@app.get("/orders/{order_id}/events")
+def get_order_events(order_id: int):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT event_status, created_at
+                FROM order_events
+                WHERE order_id = %s
+                ORDER BY created_at
+            """, (order_id,))
+            events = cur.fetchall()
+
+        return {
+            "order_id": order_id,
+            "events": events
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
 
 # LOCALIZAÇÃO DO ENTREGADOR
 @app.post("/couriers/{courier_id}/location")
