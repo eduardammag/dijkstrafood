@@ -1,0 +1,119 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: dijkstrafood-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  postgres:
+    image: postgres:16
+    container_name: dijkstrafood-postgres
+    environment:
+      POSTGRES_DB: dijkstrafood
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dijkstrafood"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./api
+    container_name: dijkstrafood-api
+    environment:
+      USE_DYNAMO: "false"
+      DB_HOST: postgres
+      DB_NAME: dijkstrafood
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_PORT: 5432
+      DB_SSLMODE: disable
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+    ports:
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  restaurant-worker:
+    build: ./restaurant-worker
+    container_name: dijkstrafood-restaurant-worker
+    environment:
+      API_URL: http://api:8000
+      RESTAURANT_ID: 1
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  routing-service:
+    build:
+      context: ./delivery_service
+      dockerfile: routing_service/Dockerfile
+    container_name: dijkstrafood-routing-service
+    ports:
+      - "8002:8002"
+
+  delivery-service:
+    build: ./delivery_service
+    container_name: dijkstrafood-delivery-service
+    environment:
+      API_URL: http://api:8000
+      ROUTING_URL: http://routing-service:8002/rota
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+    ports:
+      - "8001:8001"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_started
+      routing-service:
+        condition: service_started
+
+  courier-worker-1:
+    build: ./courier-worker
+    container_name: dijkstrafood-courier-worker-1
+    environment:
+      API_URL: http://api:8000
+      COURIER_ID: 1
+      MOVE_INTERVAL: 1
+      INITIAL_LAT: -22.1210
+      INITIAL_LON: -51.3880
+      IGNORE_LOCATION_ERRORS: "true"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:

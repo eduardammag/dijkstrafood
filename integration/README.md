@@ -35,3 +35,5 @@ set COURIER_ID=1
 python courier_worker.py
 
 ```
+
+Poste um novo pedido com: curl -X POST http://localhost:8000/orders -H "Content-Type: application/json" -d "{\"client_id\":1,\"restaurant_id\":1,\"items\":[{\"name\":\"Pizza\",\"quantity\":1},{\"name\":\"Refrigerante\",\"quantity\":14}]}"
