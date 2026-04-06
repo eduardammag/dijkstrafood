@@ -1,27 +1,101 @@
 from fastapi import FastAPI
-import osmnx as ox
+import psycopg2
+import os
+from dotenv import load_dotenv
 
-from graph import carregar_grafo
-from dijkstra import montar_rota_completa, rota_para_coords
+load_dotenv()
 
 app = FastAPI()
-G = carregar_grafo()
+
+def get_conn():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        port=os.getenv("DB_PORT")
+    )
 
 
-@app.post("/rota")
-def calcular_rota_api(data: dict):
-    entregador = data["entregador"]
-    restaurante = data["restaurante"]
-    cliente = data["cliente"]
+@app.post("/couriers/ocupar")
+def ocupar(data: dict):
+    courier_id = data["courier_id"]
 
-    ent_node = ox.distance.nearest_nodes(G, entregador["lon"], entregador["lat"])
-    rest_node = ox.distance.nearest_nodes(G, restaurante["lon"], restaurante["lat"])
-    cli_node = ox.distance.nearest_nodes(G, cliente["lon"], cliente["lat"])
+    conn = get_conn()
+    cursor = conn.cursor()
 
-    rota_nodes = montar_rota_completa(G, ent_node, rest_node, cli_node)
-    rota_coords = rota_para_coords(G, rota_nodes)
+    cursor.execute(
+        """
+        UPDATE couriers
+        SET is_available = FALSE
+        WHERE user_id = %s
+        AND is_available = TRUE
+        """,
+        (courier_id,)
+    )
 
-    # reduz densidade, reduzindo a quantidade de pontos para otimizar
-    rota_coords = rota_coords[::2]
+    sucesso = cursor.rowcount > 0
 
-    return {"rota": rota_coords}
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    if not sucesso:
+        return {"erro": "indisponível"}
+
+    return {"ok": True}
+
+
+@app.post("/couriers/liberar")
+def liberar(data: dict):
+    courier_id = data["courier_id"]
+    lat = data["lat"]
+    lon = data["lon"]
+
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE couriers SET is_available = TRUE WHERE user_id = %s",
+        (courier_id,)
+    )
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET latitude = %s,
+            longitude = %s
+        WHERE user_id = %s
+        """,
+        (lat, lon, courier_id)
+    )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"ok": True}
+
+@app.get("/couriers/disponiveis")
+def listar_disponiveis():
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT u.user_id, u.latitude, u.longitude
+        FROM users u
+        JOIN couriers c ON u.user_id = c.user_id
+        WHERE c.is_available = TRUE
+        """
+    )
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return [
+        {"id": r[0], "lat": r[1], "lon": r[2]}
+        for r in rows
+    ]

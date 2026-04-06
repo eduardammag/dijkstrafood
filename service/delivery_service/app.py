@@ -11,33 +11,60 @@ from utils import gerar_rota_simples, filtrar_entregadores
 app = FastAPI()
 G = carregar_grafo()
 
+USER_SERVICE_URL = "http://user-service"
+
 
 @app.post("/alocar")
 def alocar_entrega(data: dict):
 
     restaurante = data["restaurante"]
     cliente = data["cliente"]
-    entregadores_geral = data["entregadores"]
-    entregadores_filtrados = filtrar_entregadores(restaurante, entregadores_geral)
 
-    # fallback: se filtro removeu todos, usa lista original
-    if entregadores_filtrados:
-        entregadores = entregadores_filtrados
-    else:
-        entregadores = entregadores_geral
+    try:
+        response = requests.get(
+            "http://user-service/couriers/disponiveis",
+            timeout=2
+        )
+        response.raise_for_status()
+        entregadores_geral = response.json()
+
+    except requests.exceptions.RequestException:
+        return {"erro": "falha ao buscar entregadores"}
+
+    # filtro inicial
+    entregadores_filtrados = filtrar_entregadores(restaurante, entregadores_geral)
+    entregadores = entregadores_filtrados if entregadores_filtrados else entregadores_geral
 
     rest_node = ox.distance.nearest_nodes(G, restaurante["lon"], restaurante["lat"])
-
     entregador_nodes = mapear_entregadores(G, entregadores)
 
-    entregador_id = encontrar_entregador(G, rest_node, entregador_nodes)
+    # 🔥 retry + lock via API
+    for _ in range(3):
+        entregador_id = encontrar_entregador(G, rest_node, entregador_nodes)
 
-    if not entregador_id:
-        return {"erro": "sem entregador"}
+        if not entregador_id:
+            return {"erro": "sem entregador"}
+
+        # tenta ocupar via user-service
+        try:
+            resp = requests.post(
+                f"{USER_SERVICE_URL}/couriers/ocupar",
+                json={"courier_id": entregador_id},
+                timeout=2
+            )
+
+            if resp.status_code == 200:
+                break  # sucesso
+
+        except requests.exceptions.RequestException:
+            continue
+
+    else:
+        return {"erro": "nenhum entregador disponível após tentativas"}
 
     entregador = next(e for e in entregadores if e["id"] == entregador_id)
 
-    # chama routing-service
+    # rota
     try:
         response = requests.post(
             "http://routing-service/rota",
@@ -53,7 +80,6 @@ def alocar_entrega(data: dict):
         rota = response.json()["rota"]
 
     except requests.exceptions.RequestException:
-        # fallback simples se routing-service falhar
         rota = (
             gerar_rota_simples(
                 (entregador["lat"], entregador["lon"]),
@@ -70,10 +96,7 @@ def alocar_entrega(data: dict):
     threading.Thread(
         target=simular_movimento,
         args=(entregador_id, rota),
-        daemon=True,
-        name=f"tracking-{entregador_id}"
+        daemon=True
     ).start()
-
-    
 
     return {"entregador_id": entregador_id}
