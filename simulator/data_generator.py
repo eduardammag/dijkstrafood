@@ -1,6 +1,7 @@
 import random
 import time
 from typing import List
+import uuid
 
 from models import User, UserType, Courier, Restaurant, Location
 
@@ -105,7 +106,8 @@ def random_name() -> str:
 def random_email(name: str) -> str:
     slug = name.lower().replace(" ", ".")
     suffix = random.randint(1000, 9999)
-    return f"{slug}{suffix}@example.com"
+    email = f"{slug}{suffix}.{uuid.uuid4().hex[:8]}@example.com"
+    return email
 
 
 def random_phone() -> str:
@@ -176,7 +178,7 @@ def build_order_items_for_restaurant(cuisine_type: str) -> List[dict]:
 
     return [
         {
-            "item_name": item,
+            "name": item,
             "quantity": random.randint(1, 3),
         }
         for item in chosen_items
