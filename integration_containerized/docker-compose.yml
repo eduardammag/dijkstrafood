@@ -32,7 +32,12 @@ services:
     build: ./api
     container_name: dijkstrafood-api
     environment:
-      USE_DYNAMO: "false"
+      USE_DYNAMO: "True"
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      DYNAMO_TABLE: ${DYNAMO_TABLE}
       DB_HOST: postgres
       DB_NAME: dijkstrafood
       DB_USER: postgres

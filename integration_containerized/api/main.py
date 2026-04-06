@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .broker import (
+from broker import (
     publish_new_order,
     publish_ready_for_delivery,
     publish_delivery_assignment,
@@ -30,6 +30,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 # -------------------------
 # Config
 # -------------------------
+print("USE_DYNAMO: ", os.getenv("USE_DYNAMO"))
 USE_DYNAMO = os.getenv("USE_DYNAMO", "true").lower() == "true"
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -46,9 +47,10 @@ DB_SSLMODE = os.getenv("DB_SSLMODE", "prefer")
 
 DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
 
+print("USE_DYNAMO raw:", os.getenv("USE_DYNAMO"))
+print("USE_DYNAMO parsed:", USE_DYNAMO)
 print("AWS_REGION:", AWS_REGION)
 print("DYNAMO_TABLE:", DYNAMO_TABLE)
-print("USE_DYNAMO:", USE_DYNAMO)
 print("AWS_ACCESS_KEY_ID prefix:", (AWS_ACCESS_KEY_ID or "")[:6])
 print("AWS_SESSION_TOKEN exists:", AWS_SESSION_TOKEN is not None)
 
@@ -82,6 +84,8 @@ if USE_DYNAMO:
         print("DynamoDB não disponível:", repr(e))
         USE_DYNAMO = False
 
+print("USE_DYNAMO final:", USE_DYNAMO)
+
 # -------------------------
 # DB
 # -------------------------
@@ -102,8 +106,8 @@ def init_db():
         conn = get_connection()
         conn.autocommit = True
 
-        schema_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "database", "schema.sql"))
-        seed_path = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "database", "seed.sql"))
+        schema_path = os.path.join(BASE_DIR, "database", "schema.sql")
+        seed_path = os.path.join(BASE_DIR, "database", "seed.sql")
 
         print("BASE_DIR:", BASE_DIR)
         print("Schema path:", schema_path)
