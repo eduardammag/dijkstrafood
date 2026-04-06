@@ -10,6 +10,7 @@ def gerar_rota_simples(p1, p2, passos=20):
         for t in [i/passos for i in range(passos)]
     ]
 
+
 def filtrar_entregadores(restaurante, entregadores, limite=0.05):
     return [
         e for e in entregadores
