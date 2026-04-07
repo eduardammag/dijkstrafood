@@ -10,6 +10,7 @@ from matcher import mapear_entregadores, encontrar_entregador
 from routing_service.graph import carregar_grafo
 from utils import gerar_rota_simples, filtrar_entregadores
 from graph_utils import nearest_node
+from delivery_service.tracking import simular_movimento
 
 app = FastAPI()
 
@@ -68,6 +69,18 @@ def health():
     return {"status": "delivery service running"}
 
 
+def marcar_ocupado(courier_id):
+    try:
+        response = requests.post(
+            f"{API_URL}/couriers/ocupar",
+            json={"courier_id": courier_id},
+            timeout=5
+        )
+        return response.status_code == 200
+    except:
+        return False
+
+
 @app.post("/alocar")
 def alocar_entrega(data: dict):
     restaurante = data["restaurante"]
@@ -79,10 +92,17 @@ def alocar_entrega(data: dict):
 
     rest_node = nearest_node(G, restaurante["lon"], restaurante["lat"])
     entregador_nodes = mapear_entregadores(G, entregadores)
-    entregador_id = encontrar_entregador(G, rest_node, entregador_nodes)
 
-    if not entregador_id:
-        return {"erro": "sem entregador"}
+    for _ in range(3):
+        entregador_id = encontrar_entregador(G, rest_node, entregador_nodes)
+
+        if not entregador_id:
+            return {"erro": "sem entregador"}
+
+        if marcar_ocupado(entregador_id):
+            break
+    else:
+        return {"erro": "nenhum entregador disponível após tentativas"}
 
     entregador = next(e for e in entregadores if e["id"] == entregador_id)
 
@@ -109,6 +129,14 @@ def alocar_entrega(data: dict):
             (restaurante["lat"], restaurante["lon"]),
             (cliente["lat"], cliente["lon"])
         )
+
+    rota_completa = route_to_restaurant + route_to_client
+
+    threading.Thread(
+        target=simular_movimento,
+        args=(entregador_id, rota_completa),
+        daemon=True
+    ).start()
 
     return {
         "order_id": data["order_id"],

@@ -3,10 +3,10 @@ import threading
 import osmnx as ox
 import requests
 
-from matcher import mapear_entregadores, encontrar_entregador
-from tracking import simular_movimento
+from delivery_service.matcher import mapear_entregadores, encontrar_entregador
+from delivery_service.tracking import simular_movimento
 from routing_service.graph import carregar_grafo
-from utils import gerar_rota_simples, filtrar_entregadores
+from delivery_service.utils import gerar_rota_simples, filtrar_entregadores
 
 app = FastAPI()
 G = carregar_grafo()

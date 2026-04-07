@@ -487,3 +487,65 @@ def get_latest_courier_location(courier_id: int):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Atualizar o is_avaliable o entregador após o pedido
+
+@app.post("/couriers/ocupar")
+def ocupar_courier(data: dict):
+    courier_id = data["courier_id"]
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE couriers
+                    SET is_available = FALSE
+                    WHERE courier_id = %s
+                    AND is_available = TRUE
+                """, (courier_id,))
+
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=409, detail="Courier já está ocupado")
+
+        return {"message": "Courier ocupado"}
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
+
+        
+@app.post("/couriers/liberar")
+def liberar_courier(data: dict):
+    courier_id = data["courier_id"]
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE couriers
+                    SET is_available = TRUE
+                    WHERE courier_id = %s
+                """, (courier_id,))
+
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Courier not found")
+
+        return {"message": "Courier liberado"}
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
