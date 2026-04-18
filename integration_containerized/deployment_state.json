@@ -1,0 +1,63 @@
+{
+  "project": "dijkfood-demo",
+  "region": "us-east-1",
+  "vpc_id": "vpc-0ced10e92ad969c0a",
+  "subnet_ids": [
+    "subnet-0660738674979bedb",
+    "subnet-04d2e4941cdd1ae5f",
+    "subnet-0d7c65ac314b42eeb",
+    "subnet-0785ac5797c14cfb5",
+    "subnet-0383188512b5018da",
+    "subnet-0796d717503189cda"
+  ],
+  "availability_zones": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ],
+  "security_groups": {
+    "alb": "sg-0cfefa89572032766",
+    "ecs": "sg-0d43e16cc009421fb",
+    "rds": "sg-04b6d2c5962aebb17",
+    "rabbitmq": "sg-003f4de1e9ad452cf"
+  },
+  "dynamodb_table": "CourierLocation",
+  "rds": {
+    "identifier": "dijkfood-demo-db",
+    "endpoint": "dijkfood-demo-db.cz4w0o0yshed.us-east-1.rds.amazonaws.com",
+    "port": 5432,
+    "subnet_group": "dijkfood-demo-db-subnet-group",
+    "db_name": "dijkstrafood",
+    "username": "postgres"
+  },
+  "rabbitmq": {
+    "instance_id": "i-0b621818cf209b128",
+    "private_ip": "172.31.95.114",
+    "public_ip": "3.91.49.140",
+    "amqp_url": "amqp://guest:guest@172.31.95.114:5672/",
+    "management_url": "http://3.91.49.140:15672"
+  },
+  "ecs_cluster": "dijkfood-demo-cluster",
+  "namespace_id": null,
+  "namespace_name": null,
+  "iam": {
+    "ecs_execution_role_arn": "arn:aws:iam::545919970787:role/LabRole",
+    "ecs_task_role_arn": "arn:aws:iam::545919970787:role/LabRole"
+  },
+  "alb": {
+    "arn": "arn:aws:elasticloadbalancing:us-east-1:545919970787:loadbalancer/app/dijkfood-demo-alb/75578d5e7651a69e",
+    "dns_name": "dijkfood-demo-alb-1052284763.us-east-1.elb.amazonaws.com"
+  },
+  "alb_target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:545919970787:targetgroup/dijkfood-demo-api-tg/b3bcb2dfe2e42677",
+  "task_definitions": {
+    "api": "arn:aws:ecs:us-east-1:545919970787:task-definition/dijkfood-demo-api:14",
+    "restaurant-worker": "arn:aws:ecs:us-east-1:545919970787:task-definition/dijkfood-demo-restaurant-worker:13",
+    "routing-service": "arn:aws:ecs:us-east-1:545919970787:task-definition/dijkfood-demo-routing-service:13",
+    "delivery-service": "arn:aws:ecs:us-east-1:545919970787:task-definition/dijkfood-demo-delivery-service:13",
+    "courier-worker": "arn:aws:ecs:us-east-1:545919970787:task-definition/dijkfood-demo-courier-worker:13"
+  },
+  "api_url": "http://dijkfood-demo-alb-1052284763.us-east-1.elb.amazonaws.com"
+}
