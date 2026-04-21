@@ -1,8 +1,12 @@
-import os
 import json
+import os
+import threading
 import time
-import requests
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Set
+
 import pika
+import requests
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
@@ -10,99 +14,19 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
-COURIER_ID = int(os.getenv("COURIER_ID", "1"))
-MOVE_INTERVAL = float(os.getenv("MOVE_INTERVAL", "1"))
+DISCOVERY_INTERVAL_SECONDS = float(os.getenv("DISCOVERY_INTERVAL_SECONDS", "10"))
+MOVE_INTERVAL = float(os.getenv("MOVE_INTERVAL", "0.3"))
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
+MAX_INFLIGHT = int(os.getenv("MAX_INFLIGHT", "16"))
 IGNORE_LOCATION_ERRORS = os.getenv("IGNORE_LOCATION_ERRORS", "true").lower() == "true"
 
-INITIAL_LAT = float(os.getenv("INITIAL_LAT", "-22.1200"))
-INITIAL_LON = float(os.getenv("INITIAL_LON", "-51.3900"))
+executor = ThreadPoolExecutor(max_workers=MAX_INFLIGHT)
+registered_queues: Set[str] = set()
+registered_lock = threading.Lock()
 
 
-def update_order_status(order_id: int, status: str):
-    response = requests.put(
-        f"{API_URL}/orders/{order_id}/status",
-        json={"status": status},
-        timeout=15
-    )
-    response.raise_for_status()
-    print(f"[STATUS] Pedido {order_id} -> {status}")
-
-
-def send_location(courier_id: int, lat: float, lon: float, order_id: int):
-    response = requests.post(
-        f"{API_URL}/couriers/{courier_id}/location",
-        json={
-            "latitude": lat,
-            "longitude": lon,
-            "order_id": order_id
-        },
-        timeout=10
-    )
-    response.raise_for_status()
-    print(f"[LOC] Courier {courier_id} -> ({lat}, {lon})")
-
-
-def safe_send_location(courier_id: int, lat: float, lon: float, order_id: int):
-    try:
-        send_location(courier_id, lat, lon, order_id)
-    except Exception as e:
-        if IGNORE_LOCATION_ERRORS:
-            print(f"[LOC] Falha ignorada ao enviar localização: {e}")
-            return
-        raise
-
-
-def move_along_route(order_id: int, courier_id: int, route_points: list):
-    for lat, lon in route_points:
-        safe_send_location(courier_id, lat, lon, order_id)
-        time.sleep(MOVE_INTERVAL)
-
-
-def process_delivery(message: dict):
-    order_id = message["order_id"]
-    courier_id = int(message["courier_id"])
-    route_to_restaurant = message["route_to_pickup"]
-    route_to_client = message["route_to_delivery"]
-
-    print(f"[COURIER {courier_id}] Pedido {order_id} recebido")
-    print(f"[COURIER {courier_id}] Indo ao restaurante")
-
-    move_along_route(order_id, courier_id, route_to_restaurant)
-    update_order_status(order_id, "picked_up")
-
-    print(f"[COURIER {courier_id}] Pedido {order_id} coletado")
-    print(f"[COURIER {courier_id}] Indo ao cliente")
-
-    update_order_status(order_id, "in_transit")
-    move_along_route(order_id, courier_id, route_to_client)
-
-    update_order_status(order_id, "delivered")
-    print(f"[COURIER {courier_id}] Pedido {order_id} entregue")
-
-
-def callback(ch, method, properties, body):
-    try:
-        message = json.loads(body.decode("utf-8"))
-        print(f"[COURIER {COURIER_ID}] Mensagem recebida: {message}")
-
-        event_type = message.get("event")
-        if event_type != "delivery_assigned":
-            print(f"[COURIER {COURIER_ID}] Evento ignorado: {event_type}")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
-
-        message_courier_id = int(message.get("courier_id"))
-        if message_courier_id != COURIER_ID:
-            print(f"[COURIER {COURIER_ID}] Ignorando pedido de outro courier: {message_courier_id}")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
-
-        process_delivery(message)
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-    except Exception as e:
-        print(f"[COURIER {COURIER_ID}] Erro: {e}")
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+class RecoverableProcessingError(Exception):
+    pass
 
 
 def create_connection(retries: int = 20, delay: int = 3):
@@ -116,28 +40,184 @@ def create_connection(retries: int = 20, delay: int = 3):
                     port=RABBITMQ_PORT,
                     credentials=credentials,
                     heartbeat=600,
-                    blocked_connection_timeout=300
+                    blocked_connection_timeout=300,
                 )
             )
-        except Exception as e:
-            print(f"Tentativa {attempt}/{retries} falhou ao conectar no RabbitMQ: {e}")
+        except Exception as exc:
+            print(f"Tentativa {attempt}/{retries} falhou ao conectar no RabbitMQ: {exc}")
             time.sleep(delay)
 
     raise RuntimeError("Não foi possível conectar ao RabbitMQ.")
 
 
+def queue_name_for_courier(courier_id: int) -> str:
+    return f"courier_orders_{courier_id}"
+
+
+def fetch_courier_ids() -> List[int]:
+    response = requests.get(f"{API_URL}/couriers", timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    couriers = response.json().get("couriers", [])
+    return [int(item["courier_id"]) for item in couriers]
+
+
+def update_order_status(order_id: int, status: str):
+    response = requests.put(
+        f"{API_URL}/orders/{order_id}/status",
+        json={"status": status},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    print(f"Pedido {order_id} -> {status}")
+
+
+def post_courier_location(courier_id: int, lat: float, lon: float, order_id):
+    response = requests.post(
+    f"{API_URL}/couriers/{courier_id}/location",
+    json={
+        "latitude": lat,
+        "longitude": lon,
+        "order_id": order_id
+    },
+    timeout=REQUEST_TIMEOUT_SECONDS,
+)
+
+    if not response.ok:
+        message = f"Falha ao atualizar localização do courier {courier_id}: {response.status_code} {response.text}"
+        if IGNORE_LOCATION_ERRORS:
+            print(message)
+            return
+        raise RecoverableProcessingError(message)
+
+
+def lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def generate_linear_route(start_lat: float, start_lon: float, end_lat: float, end_lon: float, steps: int = 8):
+    route = []
+    for i in range(steps + 1):
+        t = i / steps
+        route.append(
+            {
+                "lat": lerp(start_lat, end_lat, t),
+                "lon": lerp(start_lon, end_lon, t),
+            }
+        )
+    return route
+
+
+def get_dispatch_data(order_id: int) -> dict:
+    response = requests.get(
+        f"{API_URL}/orders/{order_id}/dispatch-data",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def simulate_delivery(courier_id: int, order_id: int):
+    dispatch = get_dispatch_data(order_id)
+
+    restaurant_lat = float(dispatch["restaurant_latitude"])
+    restaurant_lon = float(dispatch["restaurant_longitude"])
+    client_lat = float(dispatch["client_latitude"])
+    client_lon = float(dispatch["client_longitude"])
+
+    pickup_route = generate_linear_route(
+        start_lat=restaurant_lat,
+        start_lon=restaurant_lon,
+        end_lat=restaurant_lat,
+        end_lon=restaurant_lon,
+        steps=1,
+    )
+
+    delivery_route = generate_linear_route(
+        start_lat=restaurant_lat,
+        start_lon=restaurant_lon,
+        end_lat=client_lat,
+        end_lon=client_lon,
+        steps=10,
+    )
+
+    update_order_status(order_id, "PICKED_UP")
+
+    for point in pickup_route:
+        post_courier_location(courier_id, point["lat"], point["lon"], order_id)
+        time.sleep(MOVE_INTERVAL)
+
+    update_order_status(order_id, "IN_TRANSIT")
+
+    for point in delivery_route:
+        post_courier_location(courier_id, point["lat"], point["lon"], order_id)
+        time.sleep(MOVE_INTERVAL)
+
+    update_order_status(order_id, "DELIVERED")
+
+
+def process_message(message: dict):
+    order_id = int(message["order_id"])
+    courier_id = int(message["courier_id"])
+
+    print(f"[courier-worker] Processando pedido {order_id} para courier {courier_id}")
+    simulate_delivery(courier_id, order_id)
+
+
+def register_queue_consumer(channel, queue_name: str):
+    with registered_lock:
+        if queue_name in registered_queues:
+            return
+
+        channel.queue_declare(queue=queue_name, durable=True)
+
+        def callback(ch, method, properties, body):
+            def job():
+                try:
+                    message = json.loads(body.decode("utf-8"))
+                    process_message(message)
+                    ch.connection.add_callback_threadsafe(
+                        lambda: ch.basic_ack(delivery_tag=method.delivery_tag)
+                    )
+                except RecoverableProcessingError as exc:
+                    print(f"Erro recuperável na fila {queue_name}: {exc}")
+                    ch.connection.add_callback_threadsafe(
+                        lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    )
+                except Exception as exc:
+                    print(f"Erro na fila {queue_name}: {exc}")
+                    ch.connection.add_callback_threadsafe(
+                        lambda: ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                    )
+
+            executor.submit(job)
+
+        channel.basic_qos(prefetch_count=MAX_INFLIGHT)
+        channel.basic_consume(queue=queue_name, on_message_callback=callback)
+        registered_queues.add(queue_name)
+        print(f"Consumidor registrado para {queue_name}")
+
+
+def discovery_loop(channel):
+    while True:
+        try:
+            courier_ids = fetch_courier_ids()
+            for courier_id in courier_ids:
+                register_queue_consumer(channel, queue_name_for_courier(courier_id))
+        except Exception as exc:
+            print(f"Falha ao descobrir couriers via API: {exc}")
+
+        time.sleep(DISCOVERY_INTERVAL_SECONDS)
+
+
 def main():
-    queue_name = f"courier_orders_{COURIER_ID}"
     connection = create_connection()
-
     channel = connection.channel()
-    channel.queue_declare(queue=queue_name, durable=True)
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue=queue_name, on_message_callback=callback)
 
-    print(f"Courier worker {COURIER_ID} consumindo fila {queue_name}")
+    print("Courier worker genérico iniciado")
 
-    safe_send_location(COURIER_ID, INITIAL_LAT, INITIAL_LON, 0)
+    discovery_thread = threading.Thread(target=discovery_loop, args=(channel,), daemon=True)
+    discovery_thread.start()
+
     channel.start_consuming()
 
 

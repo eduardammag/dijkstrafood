@@ -1,33 +1,38 @@
 import time
-import requests
+from typing import Optional
 
-from models import (
-    User,
-    Courier,
-    Restaurant,
-    RequestResult,
-)
+import httpx
+
+from models import User, Courier, Restaurant, RequestResult
 from config import SimulatorConfig
 
 
 class ApiClient:
     def __init__(self, config: SimulatorConfig):
-        self.base_url = config.api.base_url
+        self.base_url = config.api.base_url.rstrip("/")
         self.timeout = config.api.timeout_seconds
+        self._client: Optional[httpx.AsyncClient] = None
 
-    def _request(self, method: str, path: str, json=None) -> RequestResult:
-        url = f"{self.base_url}{path}"
+    async def __aenter__(self):
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def _request(self, method: str, path: str, json=None) -> RequestResult:
+        if self._client is None:
+            raise RuntimeError("ApiClient precisa ser usado com 'async with'.")
 
         start = time.perf_counter()
 
         try:
-            response = requests.request(
-                method,
-                url,
-                json=json,
-                timeout=self.timeout,
-            )
-
+            response = await self._client.request(method, path, json=json)
             latency = (time.perf_counter() - start) * 1000
 
             parsed_json = None
@@ -41,12 +46,11 @@ class ApiClient:
                 latency_ms=latency,
                 status_code=response.status_code,
                 response_json=parsed_json,
-                error=None if response.ok else response.text,
+                error=None if response.is_success else response.text,
             )
 
         except Exception as e:
             latency = (time.perf_counter() - start) * 1000
-
             return RequestResult(
                 success=False,
                 latency_ms=latency,
@@ -55,8 +59,7 @@ class ApiClient:
                 error=str(e),
             )
 
-    # USERS
-    def create_user(self, user: User) -> RequestResult:
+    async def create_user(self, user: User) -> RequestResult:
         payload = {
             "user_name": user.user_name,
             "email": user.email,
@@ -65,19 +68,17 @@ class ApiClient:
             "longitude": user.longitude,
             "user_type": user.user_type.value,
         }
-        return self._request("POST", "/users", json=payload)
+        return await self._request("POST", "/users", json=payload)
 
-    # COURIERS
-    def create_courier(self, courier: Courier) -> RequestResult:
+    async def create_courier(self, courier: Courier) -> RequestResult:
         payload = {
             "user_id": courier.user_id,
             "vehicle_type": courier.vehicle_type,
             "is_available": courier.is_available,
         }
-        return self._request("POST", "/couriers", json=payload)
+        return await self._request("POST", "/couriers", json=payload)
 
-    # RESTAURANTS
-    def create_restaurant(self, restaurant: Restaurant) -> RequestResult:
+    async def create_restaurant(self, restaurant: Restaurant) -> RequestResult:
         payload = {
             "restaurant_name": restaurant.restaurant_name,
             "cuisine_type": restaurant.cuisine_type,
@@ -85,21 +86,15 @@ class ApiClient:
             "restaurant_longitude": restaurant.restaurant_longitude,
             "creator_user_id": restaurant.creator_user_id,
         }
-        return self._request("POST", "/restaurants", json=payload)
+        return await self._request("POST", "/restaurants", json=payload)
 
-    # ORDERS
-    def create_order(
-        self,
-        client_id: int,
-        restaurant_id: int,
-        items: list[dict],
-    ) -> RequestResult:
+    async def create_order(self, client_id: int, restaurant_id: int, items: list[dict]) -> RequestResult:
         payload = {
             "client_id": client_id,
             "restaurant_id": restaurant_id,
-            "items": items,  # cada item precisa ser {"name": ..., "quantity": ...}
+            "items": items,
         }
-        return self._request("POST", "/orders", json=payload)
+        return await self._request("POST", "/orders", json=payload)
 
-    def get_order(self, order_id: int) -> RequestResult:
-        return self._request("GET", f"/orders/{order_id}")
+    async def get_order(self, order_id: int) -> RequestResult:
+        return await self._request("GET", f"/orders/{order_id}")

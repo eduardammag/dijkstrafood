@@ -1,12 +1,12 @@
 import argparse
-import base64
 import json
-import os
-import socket
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+import subprocess
+import time
+import requests
 
 import boto3
 from botocore.exceptions import ClientError, WaiterError
@@ -14,6 +14,39 @@ from botocore.exceptions import ClientError, WaiterError
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "deployment_state.json"
+
+
+
+def wait_for_api_stable(api_base_url: str, timeout_seconds: int = 180):
+    deadline = time.time() + timeout_seconds
+    consecutive_success = 0
+
+    endpoints = ["/", "/restaurants", "/couriers"]
+
+    while time.time() < deadline:
+        all_ok = True
+
+        for path in endpoints:
+            try:
+                r = requests.get(f"{api_base_url.rstrip('/')}{path}", timeout=10)
+                if r.status_code != 200:
+                    all_ok = False
+                    break
+            except Exception:
+                all_ok = False
+                break
+
+        if all_ok:
+            consecutive_success += 1
+            print(f"[deploy] API estável: {consecutive_success}/5")
+            if consecutive_success >= 5:
+                return
+        else:
+            consecutive_success = 0
+
+        time.sleep(5)
+
+    raise RuntimeError("API não estabilizou a tempo")
 
 
 def log(msg: str):
@@ -159,12 +192,24 @@ class Deployer:
             self.ddb.create_table(
                 TableName=table_name,
                 BillingMode="PAY_PER_REQUEST",
-                AttributeDefinitions=[{"AttributeName": "courier_id", "AttributeType": "N"}],
-                KeySchema=[{"AttributeName": "courier_id", "KeyType": "HASH"}],
+                AttributeDefinitions=[
+                    {"AttributeName": "courier_id", "AttributeType": "S"},
+                    {"AttributeName": "timestamp", "AttributeType": "S"},
+                ],
+                KeySchema=[
+                    {"AttributeName": "courier_id", "KeyType": "HASH"},
+                    {"AttributeName": "timestamp", "KeyType": "RANGE"},
+                ],
             )
             waiter = self.ddb.get_waiter("table_exists")
             waiter.wait(TableName=table_name)
         else:
+            desc = self.ddb.describe_table(TableName=table_name)["Table"]
+            key_schema = {(k["AttributeName"], k["KeyType"]) for k in desc.get("KeySchema", [])}
+            if key_schema != {("courier_id", "HASH"), ("timestamp", "RANGE")}:
+                raise RuntimeError(
+                    f"Tabela DynamoDB {table_name} existe com schema incompatível: {desc.get('KeySchema')}"
+                )
             log(f"DynamoDB {table_name} já existe")
         self.state["dynamodb_table"] = table_name
 
@@ -650,10 +695,37 @@ docker run -d --restart unless-stopped \
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Caminho do config JSON")
+    parser.add_argument("--scenario", choices=["normal", "peak", "special"], default=None)
+    parser.add_argument("--run-simulator", action="store_true")
+    parser.add_argument("--destroy-on-finish", action="store_true")
     args = parser.parse_args()
-    config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+
+    config_path = Path(args.config)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
     deployer = Deployer(config)
-    deployer.deploy()
+
+    try:
+        deployer.deploy()
+        wait_for_api_stable(deployer.state["api_url"])
+        if args.run_simulator:
+            config["api_url"] = deployer.state["api_url"]
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            simulator_dir = Path(__file__).resolve().parent / "simulator"
+            subprocess.run(
+                [sys.executable, "main.py", "--scenario", args.scenario or "normal"],
+                cwd=simulator_dir,
+                check=True,
+            )
+    finally:
+        if args.destroy_on_finish:
+            state_file = Path(__file__).resolve().parent / "deployment_state.json"
+            if state_file.exists():
+                subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve().parent / "destroy.py"), "--config", str(config_path)],
+                    check=False,
+                )
+            else:
+                log("deployment_state.json ainda não existe; pulando destroy automático.")
 
 
 if __name__ == "__main__":

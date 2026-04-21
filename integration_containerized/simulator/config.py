@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from typing import Literal
+import json
 
+with open("../deployment_state.json", "r") as f:
+    config = json.load(f)
 
 ScenarioName = Literal["normal", "peak", "special"]
 
@@ -86,7 +89,7 @@ SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
 
 DEFAULT_CONFIG = SimulatorConfig(
     api=ApiConfig(
-        base_url="http://dijkfood-demo-alb-1052284763.us-east-1.elb.amazonaws.com/",
+        base_url=config["api_url"],
         timeout_seconds=10.0,
     ),
     population=PopulationConfig(
