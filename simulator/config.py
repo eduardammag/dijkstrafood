@@ -86,8 +86,8 @@ SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
 
 DEFAULT_CONFIG = SimulatorConfig(
     api=ApiConfig(
-        base_url="http://localhost:8000",
-        timeout_seconds=5.0,
+        base_url="http://dijkfood-demo-alb-1052284763.us-east-1.elb.amazonaws.com",
+        timeout_seconds=10.0,
     ),
     population=PopulationConfig(
         admins=1,

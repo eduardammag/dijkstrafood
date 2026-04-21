@@ -1,0 +1,45 @@
+{
+  "region": "us-east-1",
+  "project_name": "dijkfood-demo",
+  "your_ip_cidr": "189.122.185.58/32",
+  "dockerhub_images": {
+    "api": "marimarifr/dijkstrafood-api:latest",
+    "restaurant_worker": "marimarifr/restaurant-worker:latest",
+    "courier_worker": "marimarifr/courier-worker:latest",
+    "delivery_service": "marimarifr/delivery-service:latest",
+    "routing_service": "marimarifr/routing-service:latest"
+  },
+  "ecs": {
+    "cpu": "1024",
+    "memory": "2048",
+    "desired_count_api": 1,
+    "desired_count_restaurant_worker": 3,
+    "desired_count_delivery_service": 3,
+    "desired_count_routing_service": 1,
+    "desired_count_courier_worker": 3,
+    "assign_public_ip": true
+  },
+  "database": {
+    "db_name": "dijkstrafood",
+    "username": "postgres",
+    "password": "postgres12345",
+    "allocated_storage": 20,
+    "instance_class": "db.t3.micro",
+    "publicly_accessible": false,
+    "multi_az": false
+  },
+  "dynamodb": {
+    "table_name": "CourierLocation"
+  },
+  "rabbitmq": {
+    "instance_type": "t3.micro",
+    "ami_id": "ami-0c101f26f147fa7fd",
+    "username": "guest",
+    "password": "guest"
+  },
+  "iam": {
+    "ecs_execution_role_arn": "",
+    "ecs_task_role_arn": ""
+  },
+  "api_url": "http://dijkfood-demo-alb-285390987.us-east-1.elb.amazonaws.com"
+}

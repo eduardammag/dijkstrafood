@@ -1,0 +1,59 @@
+{
+  "summary": {
+    "scenario": "peak",
+    "orders_per_second": 50,
+    "duration_seconds": 60,
+    "expected_orders": 3000,
+    "completed_orders": 3000,
+    "successful_orders": 3000,
+    "failed_orders": 0,
+    "throughput": 0.24361061671986592
+  },
+  "endpoints": {
+    "POST /users": {
+      "total_requests": 151,
+      "success": 151,
+      "errors": 0,
+      "avg_latency": 349.01910264735784,
+      "p95_latency": 380.66901988349855,
+      "min_latency": 329.55000014044344,
+      "max_latency": 455.11760003864765
+    },
+    "POST /couriers": {
+      "total_requests": 100,
+      "success": 100,
+      "errors": 0,
+      "avg_latency": 347.44384999619797,
+      "p95_latency": 374.13985492894426,
+      "min_latency": 329.4615000486374,
+      "max_latency": 408.9824999682605
+    },
+    "POST /restaurants": {
+      "total_requests": 20,
+      "success": 20,
+      "errors": 0,
+      "avg_latency": 346.23563998611644,
+      "p95_latency": 367.36656511202455,
+      "min_latency": 330.7411000132561,
+      "max_latency": 367.92160011827946
+    },
+    "POST /orders": {
+      "total_requests": 3000,
+      "success": 3000,
+      "errors": 0,
+      "avg_latency": 389.90721579703194,
+      "p95_latency": 494.74301488371566,
+      "min_latency": 341.51990013197064,
+      "max_latency": 2352.214700076729
+    },
+    "GET /orders/{id}": {
+      "total_requests": 30000,
+      "success": 30000,
+      "errors": 0,
+      "avg_latency": 371.0232681573524,
+      "p95_latency": 454.06997989630327,
+      "min_latency": 324.71459987573326,
+      "max_latency": 3210.197700187564
+    }
+  }
+}
