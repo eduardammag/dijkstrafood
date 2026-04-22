@@ -206,6 +206,14 @@ def alocar_entrega(data: dict):
         customer=customer,
     )
 
+    rota_completa = route_to_restaurant + route_to_client
+
+    threading.Thread(
+        target=simular_movimento,
+        args=(entregador_id, rota_completa),
+        daemon=True
+    ).start()
+
     return {
         "order_id": data["order_id"],
         "entregador_id": int(selected_courier["id"]),
