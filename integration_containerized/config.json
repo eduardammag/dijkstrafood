@@ -41,5 +41,32 @@
     "ecs_execution_role_arn": "",
     "ecs_task_role_arn": ""
   },
-  "api_url": "http://dijkfood-demo-alb-285390987.us-east-1.elb.amazonaws.com"
+  "api_url": "http://dijkfood-demo-alb-1779902067.us-east-1.elb.amazonaws.com",
+  "autoscaling": {
+    "api": {
+      "min": 1,
+      "max": 10,
+      "target_cpu": 60.0
+    },
+    "restaurant_worker": {
+      "min": 1,
+      "max": 10,
+      "target_cpu": 60.0
+    },
+    "courier_worker": {
+      "min": 1,
+      "max": 10,
+      "target_cpu": 60.0
+    },
+    "routing_service": {
+      "min": 1,
+      "max": 6,
+      "target_cpu": 60.0
+    },
+    "delivery_service": {
+      "min": 1,
+      "max": 6,
+      "target_cpu": 60.0
+    }
+  }
 }

@@ -22,7 +22,7 @@
   "database": {
     "db_name": "dijkstrafood",
     "username": "postgres",
-    "password": "postgres12345",
+    "password": "postgres",
     "allocated_storage": 20,
     "instance_class": "db.t3.micro",
     "publicly_accessible": false,

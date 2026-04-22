@@ -63,3 +63,15 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity INT NOT NULL CHECK (quantity > 0),
     FOREIGN KEY (order_id) REFERENCES orders(order_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_orders_client_created
+ON orders (client_id, created_at, order_id);
+
+CREATE INDEX IF NOT EXISTS idx_orders_courier_status_created
+ON orders (courier_id, order_status, created_at, order_id);
+
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id
+ON order_items (order_id);
+
+CREATE INDEX IF NOT EXISTS idx_order_events_order_created
+ON order_events (order_id, created_at, event_id);

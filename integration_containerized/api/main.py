@@ -1,5 +1,4 @@
 import os
-import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,81 +12,60 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from broker import (
-    publish_new_order,
-    publish_ready_for_delivery,
-)
-from order_status import (
-    normalize_status,
-    is_valid_status,
-    validate_transition,
-)
+# rodar API:
+# uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # -------------------------
-# Paths + .env
+# Carregar variáveis
+# -------------------------
+load_dotenv()
+
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+DB_HOST = os.getenv("DB_HOST", "dijkstrafood-db.cz4w0o0yshed.us-east-1.rds.amazonaws.com")
+DB_NAME = os.getenv("DB_NAME", "dijkstrafood")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres12345")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+
+DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
+USE_DYNAMO = os.getenv("USE_DYNAMO", "false").lower() == "true"
+
+# -------------------------
+# Caminhos
 # -------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
-
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 # -------------------------
-# Config
-# -------------------------
-USE_DYNAMO = os.getenv("USE_DYNAMO", "true").lower() == "true"
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_NAME = os.getenv("DB_NAME", "dijkstrafood")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
-DB_SSLMODE = os.getenv("DB_SSLMODE", "prefer")
-
-DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
-
-print("USE_DYNAMO:", USE_DYNAMO)
-print("AWS_REGION:", AWS_REGION)
-print("DYNAMO_TABLE:", DYNAMO_TABLE)
-print("AWS_ACCESS_KEY_ID exists:", bool(os.getenv("AWS_ACCESS_KEY_ID")))
-print("AWS_SECRET_ACCESS_KEY exists:", bool(os.getenv("AWS_SECRET_ACCESS_KEY")))
-print("AWS_SESSION_TOKEN exists:", bool(os.getenv("AWS_SESSION_TOKEN")))
-print(
-    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:",
-    os.getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"),
-)
-
-# -------------------------
 # DynamoDB
 # -------------------------
-aws_session = None
-dynamodb = None
 realtime_table = None
 
-if USE_DYNAMO:
+def init_dynamo():
+    global realtime_table, USE_DYNAMO
+
+    if not USE_DYNAMO:
+        print("DynamoDB desabilitado por configuração")
+        return
+
     try:
-        aws_session = boto3.Session(region_name=AWS_REGION)
-
-        sts = aws_session.client("sts")
-        identity = sts.get_caller_identity()
-        print("AWS caller identity:", identity)
-
-        dynamodb = aws_session.resource("dynamodb")
+        # Em ECS, o ideal é usar a task role automaticamente.
+        dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         realtime_table = dynamodb.Table(DYNAMO_TABLE)
-        realtime_table.load()
 
-        print(f"DynamoDB conectado com sucesso na tabela {DYNAMO_TABLE}")
+        # valida acesso e existência da tabela
+        realtime_table.load()
+        print(f"DynamoDB conectado: {DYNAMO_TABLE}")
 
     except Exception as e:
-        print("DynamoDB não disponível:", repr(e))
-        traceback.print_exc()
+        print(f"DynamoDB indisponível, desativando: {e}")
+        realtime_table = None
         USE_DYNAMO = False
 
-print("USE_DYNAMO final:", USE_DYNAMO)
-
 # -------------------------
-# DB
+# Conexão RDS
 # -------------------------
 def get_connection():
     return psycopg2.connect(
@@ -96,10 +74,24 @@ def get_connection():
         user=DB_USER,
         password=DB_PASSWORD,
         port=DB_PORT,
-        sslmode=DB_SSLMODE,
+        sslmode="require",
+        connect_timeout=5,
     )
 
+def check_db_connection() -> tuple[bool, str]:
+    conn = None
+    try:
+        conn = get_connection()
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        if conn is not None:
+            conn.close()
 
+# -------------------------
+# INIT DB (schema + seed)
+# -------------------------
 def init_db():
     conn = None
     try:
@@ -115,75 +107,113 @@ def init_db():
         print("Schema exists:", os.path.exists(schema_path))
         print("Seed exists:", os.path.exists(seed_path))
 
+        if not os.path.exists(schema_path):
+            raise RuntimeError(f"Schema file não encontrado: {schema_path}")
+
         with conn.cursor() as cur:
-            if os.path.exists(schema_path):
-                try:
-                    with open(schema_path, "r", encoding="utf-8") as f:
-                        cur.execute(f.read())
-                    print("Schema carregado")
-                except Exception as e:
-                    print("Schema já existe (ok):", e)
-            else:
-                print("schema.sql não encontrado")
+            with open(schema_path, "r", encoding="utf-8") as f:
+                cur.execute(f.read())
+            print("Schema carregado")
 
             if os.path.exists(seed_path):
-                try:
-                    with open(seed_path, "r", encoding="utf-8") as f:
-                        sql = f.read().strip()
-                        if sql:
-                            cur.execute(sql)
-                    print("Seed inserido")
-                except Exception as e:
-                    print("Seed já inserido (ok):", e)
-            else:
-                print("seed.sql não encontrado")
+                with open(seed_path, "r", encoding="utf-8") as f:
+                    cur.execute(f.read())
+                print("Seed inserido")
+
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('users', 'user_id'),
+                    COALESCE((SELECT MAX(user_id) FROM users), 1),
+                    true
+                );
+            """)
+
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('restaurants', 'restaurant_id'),
+                    COALESCE((SELECT MAX(restaurant_id) FROM restaurants), 1),
+                    true
+                );
+            """)
+
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('orders', 'order_id'),
+                    COALESCE((SELECT MAX(order_id) FROM orders), 1),
+                    true
+                );
+            """)
+
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('order_events', 'event_id'),
+                    COALESCE((SELECT MAX(event_id) FROM order_events), 1),
+                    true
+                );
+            """)
+
+            cur.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('order_items', 'item_id'),
+                    COALESCE((SELECT MAX(item_id) FROM order_items), 1),
+                    true
+                );
+            """)
+
+            print("Sequências ajustadas")
 
     except Exception as e:
         print("Erro ao inicializar banco:", e)
+        raise
+
     finally:
-        if conn:
+        if conn is not None:
             conn.close()
 
-
+# -------------------------
+# LIFESPAN
+# -------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Iniciando aplicação...")
+
+    init_dynamo()
+
+    # Não impedir a API de subir só porque o banco falhou no startup.
+    try:
+        init_db()
+    except Exception as e:
+        print("Startup prosseguiu sem init_db:", e)
+
     yield
+
     print("Encerrando aplicação...")
 
-
+# -------------------------
+# FastAPI
+# -------------------------
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # -------------------------
-# Models
+# MODELOS
 # -------------------------
 class Item(BaseModel):
     name: str
     quantity: int
-
 
 class OrderRequest(BaseModel):
     client_id: int
     restaurant_id: int
     items: List[Item]
 
-
 class StatusUpdate(BaseModel):
     status: str
-
 
 class CourierLocationUpdate(BaseModel):
     latitude: float
     longitude: float
     order_id: Optional[int] = None
-
-
-class AssignCourierRequest(BaseModel):
-    courier_id: int
-    route_to_pickup: List[List[float]]
-    route_to_delivery: List[List[float]]
-
 
 class UserCreate(BaseModel):
     user_name: str
@@ -193,7 +223,6 @@ class UserCreate(BaseModel):
     longitude: Optional[float] = None
     user_type: str
 
-
 class RestaurantCreate(BaseModel):
     restaurant_name: str
     cuisine_type: Optional[str] = None
@@ -201,17 +230,18 @@ class RestaurantCreate(BaseModel):
     restaurant_longitude: Optional[float] = None
     creator_user_id: int
 
-
 class CourierCreate(BaseModel):
     user_id: int
     vehicle_type: Optional[str] = None
     is_available: bool = True
 
-
 # -------------------------
-# Serializers
+# Helpers
 # -------------------------
 def serialize_order_row(row):
+    if row is None:
+        return None
+
     return {
         "order_id": row[0],
         "client_id": row[1],
@@ -221,72 +251,52 @@ def serialize_order_row(row):
         "created_at": row[5].isoformat() if row[5] else None,
     }
 
-
-def serialize_order_history(rows):
+def serialize_event_rows(rows):
     return [
         {
-            "order_id": r[0],
-            "client_id": r[1],
-            "restaurant_id": r[2],
-            "courier_id": r[3],
-            "order_status": r[4],
-            "created_at": r[5].isoformat() if r[5] else None,
+            "event_status": row[0],
+            "created_at": row[1].isoformat() if row[1] else None,
         }
-        for r in rows
+        for row in rows
     ]
 
-
-def serialize_items(rows):
-    return [{"item_name": r[0], "quantity": r[1]} for r in rows]
-
-
-def serialize_events(rows):
-    return [
-        {
-            "event_id": r[0],
-            "event_type": r[1],
-            "from_status": r[2],
-            "to_status": r[3],
-            "event_message": r[4],
-            "latitude": r[5],
-            "longitude": r[6],
-            "created_at": r[7].isoformat() if r[7] else None,
-        }
-        for r in rows
-    ]
-
+def serialize_item_rows(rows):
+    return [{"item_name": row[0], "quantity": row[1]} for row in rows]
 
 # -------------------------
-# Helpers
-# -------------------------
-def find_active_order_for_courier(cur, courier_id: int) -> Optional[int]:
-    cur.execute(
-        """
-        SELECT order_id
-        FROM orders
-        WHERE courier_id = %s
-          AND order_status IN ('PICKED_UP', 'IN_TRANSIT')
-        ORDER BY created_at DESC, order_id DESC
-        LIMIT 1
-        """,
-        (courier_id,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
-
-
-# -------------------------
-# Routes
+# Health
 # -------------------------
 @app.get("/")
 def health():
     return {"status": "API running"}
 
+@app.get("/health/db")
+def health_db():
+    ok, detail = check_db_connection()
+    if not ok:
+        raise HTTPException(status_code=500, detail=f"database error: {detail}")
+    return {"database": "ok"}
 
+@app.get("/health/full")
+def health_full():
+    db_ok, db_detail = check_db_connection()
+
+    return {
+        "api": "ok",
+        "database": "ok" if db_ok else "error",
+        "database_detail": db_detail if not db_ok else None,
+        "dynamo_enabled": USE_DYNAMO,
+        "dynamo_table": DYNAMO_TABLE if USE_DYNAMO else None,
+    }
+
+# -------------------------
+# Usuários
+# -------------------------
 @app.post("/users")
 def create_user(user: UserCreate):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -311,23 +321,28 @@ def create_user(user: UserCreate):
                         user.user_type,
                     ),
                 )
+
                 user_id = cur.fetchone()[0]
 
-        return {
-            "message": "User created successfully",
-            "user_id": user_id,
-        }
+        return {"message": "User created successfully", "user_id": user_id}
+
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-
+# -------------------------
+# Restaurantes
+# -------------------------
 @app.post("/restaurants")
 def create_restaurant(restaurant: RestaurantCreate):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -350,62 +365,31 @@ def create_restaurant(restaurant: RestaurantCreate):
                         restaurant.creator_user_id,
                     ),
                 )
+
                 restaurant_id = cur.fetchone()[0]
 
         return {
             "message": "Restaurant created successfully",
             "restaurant_id": restaurant_id,
         }
+
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-
-@app.get("/restaurants")
-def list_restaurants():
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    restaurant_id,
-                    restaurant_name,
-                    cuisine_type,
-                    restaurant_latitude,
-                    restaurant_longitude,
-                    creator_user_id
-                FROM restaurants
-                ORDER BY restaurant_id ASC
-                """
-            )
-            rows = cur.fetchall()
-
-        restaurants = [
-            {
-                "restaurant_id": r[0],
-                "restaurant_name": r[1],
-                "cuisine_type": r[2],
-                "restaurant_latitude": r[3],
-                "restaurant_longitude": r[4],
-                "creator_user_id": r[5],
-            }
-            for r in rows
-        ]
-
-        return {"restaurants": restaurants}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
+# -------------------------
+# Entregadores
+# -------------------------
 @app.post("/couriers")
 def create_courier(courier: CourierCreate):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -430,125 +414,33 @@ def create_courier(courier: CourierCreate):
             "message": "Courier created successfully",
             "courier_id": courier_id,
         }
+
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-
-@app.get("/couriers")
-def list_couriers():
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    c.user_id,
-                    c.vehicle_type,
-                    c.is_available,
-                    u.user_name,
-                    u.latitude,
-                    u.longitude
-                FROM couriers c
-                JOIN users u
-                    ON u.user_id = c.user_id
-                ORDER BY c.user_id ASC
-                """
-            )
-            rows = cur.fetchall()
-
-        couriers = [
-            {
-                "courier_id": row[0],
-                "vehicle_type": row[1],
-                "is_available": row[2],
-                "user_name": row[3],
-                "latitude": row[4],
-                "longitude": row[5],
-            }
-            for row in rows
-        ]
-
-        return {"couriers": couriers}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
-@app.get("/couriers/available")
-def get_available_couriers():
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    c.user_id,
-                    u.latitude,
-                    u.longitude
-                FROM couriers c
-                JOIN users u
-                    ON u.user_id = c.user_id
-                WHERE c.is_available = TRUE
-                ORDER BY c.user_id ASC
-                """
-            )
-            rows = cur.fetchall()
-
-        return {
-            "couriers": [
-                {"id": row[0], "lat": row[1], "lon": row[2]}
-                for row in rows
-            ]
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
+# -------------------------
+# Pedidos
+# -------------------------
 @app.post("/orders")
 def create_order(order: OrderRequest):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT user_id
-                    FROM users
-                    WHERE user_id = %s AND user_type = 'client'
-                    """,
-                    (order.client_id,),
-                )
-                client_row = cur.fetchone()
-                if not client_row:
-                    raise HTTPException(status_code=404, detail="Client not found")
-
-                cur.execute(
-                    """
-                    SELECT restaurant_id
-                    FROM restaurants
-                    WHERE restaurant_id = %s
-                    """,
-                    (order.restaurant_id,),
-                )
-                restaurant_row = cur.fetchone()
-                if not restaurant_row:
-                    raise HTTPException(status_code=404, detail="Restaurant not found")
-
-                initial_status = "CONFIRMED"
-
                 cur.execute(
                     """
                     INSERT INTO orders (client_id, restaurant_id, order_status)
                     VALUES (%s, %s, %s)
                     RETURNING order_id
                     """,
-                    (order.client_id, order.restaurant_id, initial_status),
+                    (order.client_id, order.restaurant_id, "confirmed"),
                 )
                 order_id = cur.fetchone()[0]
 
@@ -564,194 +456,80 @@ def create_order(order: OrderRequest):
                 cur.execute(
                     """
                     INSERT INTO order_events (
-                        order_id,
-                        event_type,
-                        from_status,
-                        to_status,
-                        event_message
+                        order_id, event_type, from_status, to_status, event_message
                     )
                     VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
                         order_id,
-                        "ORDER_CREATED",
+                        "status_change",
                         None,
-                        initial_status,
-                        "Order created and confirmed",
+                        "confirmed",
+                        "Order confirmed",
                     ),
                 )
-
-        publish_new_order(
-            order_id=order_id,
-            client_id=order.client_id,
-            restaurant_id=order.restaurant_id,
-            items=[item.model_dump() for item in order.items],
-        )
 
         return {
             "message": "Order created successfully",
             "order_id": order_id,
-            "order_status": initial_status,
+            "order_status": "confirmed",
         }
-    except HTTPException:
-        raise
+
     except Exception as e:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
-        conn.close()
-
-
-@app.get("/clients/{client_id}/orders")
-def get_client_order_history(client_id: int):
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT user_id
-                FROM users
-                WHERE user_id = %s AND user_type = 'client'
-                """,
-                (client_id,),
-            )
-            client_row = cur.fetchone()
-
-            if not client_row:
-                raise HTTPException(status_code=404, detail="Client not found")
-
-            cur.execute(
-                """
-                SELECT
-                    order_id,
-                    client_id,
-                    restaurant_id,
-                    courier_id,
-                    order_status,
-                    created_at
-                FROM orders
-                WHERE client_id = %s
-                ORDER BY created_at ASC, order_id ASC
-                """,
-                (client_id,),
-            )
-            rows = cur.fetchall()
-
-        return {
-            "client_id": client_id,
-            "orders": serialize_order_history(rows),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
+        if conn is not None:
+            conn.close()
 
 @app.put("/orders/{order_id}/status")
 def update_status(order_id: int, body: StatusUpdate):
-    conn = get_connection()
+    conn = None
     try:
-        requested_status = normalize_status(body.status)
-
-        if not is_valid_status(requested_status):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status: {requested_status}",
-            )
-
-        courier_id_to_release = None
-        restaurant_id = None
-        current_status = None
-
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT order_status, restaurant_id, courier_id
-                    FROM orders
-                    WHERE order_id = %s
-                    """,
-                    (order_id,),
-                )
-                order_row = cur.fetchone()
-
-                if not order_row:
-                    raise HTTPException(status_code=404, detail="Order not found")
-
-                current_status = normalize_status(order_row[0])
-                restaurant_id = order_row[1]
-                courier_id_to_release = order_row[2]
-
-                if not validate_transition(current_status, requested_status):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Invalid transition: {current_status} -> {requested_status}",
-                    )
-
                 cur.execute(
                     """
                     UPDATE orders
                     SET order_status = %s
                     WHERE order_id = %s
                     """,
-                    (requested_status, order_id),
+                    (body.status, order_id),
                 )
+
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Order not found")
 
                 cur.execute(
                     """
-                    INSERT INTO order_events (
-                        order_id,
-                        event_type,
-                        from_status,
-                        to_status,
-                        event_message
-                    )
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO order_events (order_id, event_status)
+                    VALUES (%s, %s)
                     """,
-                    (
-                        order_id,
-                        "STATUS_CHANGED",
-                        current_status,
-                        requested_status,
-                        f"Status changed from {current_status} to {requested_status}",
-                    ),
+                    (order_id, body.status),
                 )
 
-                if requested_status == "DELIVERED" and courier_id_to_release is not None:
-                    cur.execute(
-                        """
-                        UPDATE couriers
-                        SET is_available = TRUE
-                        WHERE user_id = %s
-                        """,
-                        (courier_id_to_release,),
-                    )
-
-        if requested_status == "READY_FOR_PICKUP" and restaurant_id is not None:
-            publish_ready_for_delivery(order_id, restaurant_id)
-
-        return {
-            "message": "Status updated",
-            "order_id": order_id,
-            "previous_status": current_status,
-            "new_status": requested_status,
-        }
+        return {"message": "Status updated"}
 
     except HTTPException:
         raise
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
+    except Exception as e:
+        if conn is not None:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.get("/orders/{order_id}")
 def get_order(order_id: int):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -762,6 +540,7 @@ def get_order(order_id: int):
                 (order_id,),
             )
             order = cur.fetchone()
+
             if not order:
                 raise HTTPException(status_code=404, detail="Order not found")
 
@@ -770,6 +549,7 @@ def get_order(order_id: int):
                 SELECT item_name, quantity
                 FROM order_items
                 WHERE order_id = %s
+                ORDER BY item_name
                 """,
                 (order_id,),
             )
@@ -777,18 +557,10 @@ def get_order(order_id: int):
 
             cur.execute(
                 """
-                SELECT
-                    event_id,
-                    event_type,
-                    from_status,
-                    to_status,
-                    event_message,
-                    latitude,
-                    longitude,
-                    created_at
+                SELECT event_status, created_at
                 FROM order_events
                 WHERE order_id = %s
-                ORDER BY created_at ASC, event_id ASC
+                ORDER BY created_at
                 """,
                 (order_id,),
             )
@@ -796,48 +568,32 @@ def get_order(order_id: int):
 
         return {
             "order": serialize_order_row(order),
-            "items": serialize_items(items),
-            "events": serialize_events(events),
+            "items": serialize_item_rows(items),
+            "events": serialize_event_rows(events),
         }
+
     except HTTPException:
         raise
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
 
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.get("/orders/{order_id}/events")
 def get_order_events(order_id: int):
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT order_id
-                FROM orders
-                WHERE order_id = %s
-                """,
-                (order_id,),
-            )
-            order_exists = cur.fetchone()
-            if not order_exists:
-                raise HTTPException(status_code=404, detail="Order not found")
-
-            cur.execute(
-                """
-                SELECT
-                    event_id,
-                    event_type,
-                    from_status,
-                    to_status,
-                    event_message,
-                    latitude,
-                    longitude,
-                    created_at
+                SELECT event_status, created_at
                 FROM order_events
                 WHERE order_id = %s
-                ORDER BY created_at ASC, event_id ASC
+                ORDER BY created_at
                 """,
                 (order_id,),
             )
@@ -845,268 +601,45 @@ def get_order_events(order_id: int):
 
         return {
             "order_id": order_id,
-            "events": serialize_events(events),
+            "events": serialize_event_rows(events),
         }
-    except HTTPException:
-        raise
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-
-@app.get("/orders/{order_id}/dispatch-data")
-def get_order_dispatch_data(order_id: int):
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    o.order_id,
-                    o.client_id,
-                    o.restaurant_id,
-                    o.courier_id,
-                    o.order_status,
-                    u.latitude AS client_latitude,
-                    u.longitude AS client_longitude,
-                    r.restaurant_latitude,
-                    r.restaurant_longitude
-                FROM orders o
-                JOIN users u
-                    ON u.user_id = o.client_id
-                JOIN restaurants r
-                    ON r.restaurant_id = o.restaurant_id
-                WHERE o.order_id = %s
-                """,
-                (order_id,),
-            )
-            row = cur.fetchone()
-
-            if not row:
-                raise HTTPException(status_code=404, detail="Order not found")
-
-            return {
-                "order_id": row[0],
-                "client_id": row[1],
-                "restaurant_id": row[2],
-                "courier_id": row[3],
-                "order_status": row[4],
-                "client_latitude": row[5],
-                "client_longitude": row[6],
-                "restaurant_latitude": row[7],
-                "restaurant_longitude": row[8],
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
-@app.post("/orders/{order_id}/assign-courier")
-def assign_courier(order_id: int, body: AssignCourierRequest):
-    conn = get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT client_id, restaurant_id, order_status, courier_id
-                    FROM orders
-                    WHERE order_id = %s
-                    """,
-                    (order_id,),
-                )
-                order_row = cur.fetchone()
-
-                if not order_row:
-                    raise HTTPException(status_code=404, detail="Order not found")
-
-                client_id, restaurant_id, current_status, current_courier_id = order_row
-
-                normalized_status = normalize_status(current_status)
-
-                if normalized_status != "READY_FOR_PICKUP":
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Order must be READY_FOR_PICKUP to assign courier. Current status: {normalized_status}",
-                    )
-
-                if current_courier_id is not None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Order already has courier {current_courier_id}",
-                    )
-
-                cur.execute(
-                    """
-                    SELECT user_id, is_available
-                    FROM couriers
-                    WHERE user_id = %s
-                    """,
-                    (body.courier_id,),
-                )
-                courier_row = cur.fetchone()
-
-                if not courier_row:
-                    raise HTTPException(status_code=404, detail="Courier not found")
-
-                if not courier_row[1]:
-                    raise HTTPException(status_code=409, detail="Courier is not available")
-
-                cur.execute(
-                    """
-                    UPDATE orders
-                    SET courier_id = %s
-                    WHERE order_id = %s
-                    """,
-                    (body.courier_id, order_id),
-                )
-
-                cur.execute(
-                    """
-                    UPDATE couriers
-                    SET is_available = FALSE
-                    WHERE user_id = %s
-                    """,
-                    (body.courier_id,),
-                )
-
-                cur.execute(
-                    """
-                    INSERT INTO order_events (
-                        order_id,
-                        event_type,
-                        from_status,
-                        to_status,
-                        event_message
-                    )
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        order_id,
-                        "COURIER_ASSIGNED",
-                        normalized_status,
-                        normalized_status,
-                        f"Courier {body.courier_id} assigned to order",
-                    ),
-                )
-
-        return {
-            "message": "Courier assigned",
-            "order_id": order_id,
-            "courier_id": body.courier_id,
-            "client_id": client_id,
-            "restaurant_id": restaurant_id,
-            "route_to_pickup": body.route_to_pickup,
-            "route_to_delivery": body.route_to_delivery,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
+# -------------------------
+# Localização do entregador
+# -------------------------
 @app.post("/couriers/{courier_id}/location")
 def update_courier_location(courier_id: int, body: CourierLocationUpdate):
-    conn = get_connection()
+    if not USE_DYNAMO or realtime_table is None:
+        raise HTTPException(status_code=503, detail="DynamoDB disabled")
+
     try:
         timestamp = datetime.now(timezone.utc).isoformat()
-        resolved_order_id = body.order_id
 
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT user_id
-                    FROM couriers
-                    WHERE user_id = %s
-                    """,
-                    (courier_id,),
-                )
-                courier_row = cur.fetchone()
+        realtime_table.put_item(
+            Item={
+                "courier_id": str(courier_id),
+                "timestamp": timestamp,
+                "latitude": Decimal(str(body.latitude)),
+                "longitude": Decimal(str(body.longitude)),
+                "order_id": str(body.order_id) if body.order_id is not None else "none",
+            }
+        )
 
-                if not courier_row:
-                    raise HTTPException(status_code=404, detail="Courier not found")
+        return {"message": "Location updated", "timestamp": timestamp}
 
-                cur.execute(
-                    """
-                    UPDATE users
-                    SET latitude = %s, longitude = %s
-                    WHERE user_id = %s
-                    """,
-                    (body.latitude, body.longitude, courier_id),
-                )
-
-                if resolved_order_id is None:
-                    resolved_order_id = find_active_order_for_courier(cur, courier_id)
-
-                if resolved_order_id is not None:
-                    cur.execute(
-                        """
-                        SELECT order_id
-                        FROM orders
-                        WHERE order_id = %s
-                        """,
-                        (resolved_order_id,),
-                    )
-                    order_row = cur.fetchone()
-
-                    if order_row:
-                        cur.execute(
-                            """
-                            INSERT INTO order_events (
-                                order_id,
-                                event_type,
-                                event_message,
-                                latitude,
-                                longitude
-                            )
-                            VALUES (%s, %s, %s, %s, %s)
-                            """,
-                            (
-                                resolved_order_id,
-                                "COURIER_LOCATION_UPDATED",
-                                f"Courier {courier_id} location updated",
-                                body.latitude,
-                                body.longitude,
-                            ),
-                        )
-
-        if USE_DYNAMO:
-            realtime_table.put_item(
-                Item={
-                    "courier_id": str(courier_id),
-                    "timestamp": timestamp,
-                    "latitude": Decimal(str(body.latitude)),
-                    "longitude": Decimal(str(body.longitude)),
-                    "order_id": str(resolved_order_id) if resolved_order_id is not None else "none",
-                }
-            )
-
-        return {
-            "message": "Location updated",
-            "courier_id": courier_id,
-            "order_id": resolved_order_id,
-            "timestamp": timestamp,
-        }
-    except HTTPException:
-        raise
     except Exception as e:
-        print("Erro ao salvar localização:", repr(e))
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
 
 @app.get("/couriers/{courier_id}/location")
 def get_latest_courier_location(courier_id: int):
-    if not USE_DYNAMO:
+    if not USE_DYNAMO or realtime_table is None:
         raise HTTPException(status_code=503, detail="DynamoDB disabled")
 
     try:
@@ -1121,7 +654,45 @@ def get_latest_courier_location(courier_id: int):
             raise HTTPException(status_code=404, detail="Location not found")
 
         return items[0]
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/orders/{order_id}/status")
+def get_order_status(order_id: int):
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT order_id, client_id, restaurant_id, order_status, created_at
+                FROM orders
+                WHERE order_id = %s
+                """,
+                (order_id,),
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+
+            return {
+                "order_id": row[0],
+                "client_id": row[1],
+                "restaurant_id": row[2],
+                "status": row[3],
+                "created_at": row[4].isoformat() if row[4] else None,
+            }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if conn is not None:
+            conn.close()

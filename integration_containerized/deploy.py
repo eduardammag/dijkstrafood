@@ -21,19 +21,24 @@ def wait_for_api_stable(api_base_url: str, timeout_seconds: int = 180):
     deadline = time.time() + timeout_seconds
     consecutive_success = 0
 
-    endpoints = ["/", "/restaurants", "/couriers"]
+    # Endpoints que realmente existem e servem para health check
+    endpoints = ["/", "/health/full"]
 
     while time.time() < deadline:
         all_ok = True
+        last_errors = []
 
         for path in endpoints:
+            url = f"{api_base_url.rstrip('/')}{path}"
             try:
-                r = requests.get(f"{api_base_url.rstrip('/')}{path}", timeout=10)
+                r = requests.get(url, timeout=10)
                 if r.status_code != 200:
                     all_ok = False
+                    last_errors.append(f"{path} -> HTTP {r.status_code}: {r.text[:200]}")
                     break
-            except Exception:
+            except Exception as e:
                 all_ok = False
+                last_errors.append(f"{path} -> {type(e).__name__}: {e}")
                 break
 
         if all_ok:
@@ -43,11 +48,12 @@ def wait_for_api_stable(api_base_url: str, timeout_seconds: int = 180):
                 return
         else:
             consecutive_success = 0
+            if last_errors:
+                print(f"[deploy] Health check falhou: {last_errors[0]}")
 
         time.sleep(5)
 
     raise RuntimeError("API não estabilizou a tempo")
-
 
 def log(msg: str):
     print(f"[deploy] {msg}", flush=True)
@@ -551,31 +557,41 @@ docker run -d --restart unless-stopped \
         service = self.sd.get_service(Id=service_id)["Service"]
         return service["Arn"]
 
-    def configure_autoscaling_for_api(self):
+    def configure_autoscaling_for_service(
+        self,
+        service_name: str,
+        min_capacity: int,
+        max_capacity: int,
+        target_cpu: float = 60.0,
+    ):
         cluster = self.state["ecs_cluster"]
-        service_name = "api"
         resource_id = f"service/{cluster}/{service_name}"
+
         self.application_autoscaling.register_scalable_target(
             ServiceNamespace="ecs",
             ResourceId=resource_id,
             ScalableDimension="ecs:service:DesiredCount",
-            MinCapacity=1,
-            MaxCapacity=4,
+            MinCapacity=min_capacity,
+            MaxCapacity=max_capacity,
         )
+
         self.application_autoscaling.put_scaling_policy(
-            PolicyName=f"{self.project}-api-cpu-target",
+            PolicyName=f"{self.project}-{service_name}-cpu-target",
             ServiceNamespace="ecs",
             ResourceId=resource_id,
             ScalableDimension="ecs:service:DesiredCount",
             PolicyType="TargetTrackingScaling",
             TargetTrackingScalingPolicyConfiguration={
-                "TargetValue": 60.0,
-                "PredefinedMetricSpecification": {"PredefinedMetricType": "ECSServiceAverageCPUUtilization"},
+                "TargetValue": target_cpu,
+                "PredefinedMetricSpecification": {
+                    "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
+                },
                 "ScaleInCooldown": 60,
                 "ScaleOutCooldown": 60,
             },
         )
-        log("Auto scaling configurado para api")
+
+        log(f"Auto scaling configurado para {service_name}")
 
     def deploy_services(self):
         imgs = self.config["dockerhub_images"]
@@ -650,8 +666,42 @@ docker run -d --restart unless-stopped \
         self.create_or_update_service("delivery-service", td_delivery, self.config["ecs"]["desired_count_delivery_service"], "delivery-service", 8001)
         self.create_or_update_service("courier-worker", td_courier, self.config["ecs"]["desired_count_courier_worker"], "courier-worker", None)
 
-        self.configure_autoscaling_for_api()
+        autoscaling = self.config.get("autoscaling", {})
 
+        self.configure_autoscaling_for_service(
+            "api",
+            autoscaling["api"]["min"],
+            autoscaling["api"]["max"],
+            autoscaling["api"]["target_cpu"],
+        )
+
+        self.configure_autoscaling_for_service(
+            "restaurant-worker",
+            autoscaling["restaurant_worker"]["min"],
+            autoscaling["restaurant_worker"]["max"],
+            autoscaling["restaurant_worker"]["target_cpu"],
+        )
+
+        self.configure_autoscaling_for_service(
+            "courier-worker",
+            autoscaling["courier_worker"]["min"],
+            autoscaling["courier_worker"]["max"],
+            autoscaling["courier_worker"]["target_cpu"],
+        )
+
+        self.configure_autoscaling_for_service(
+            "routing-service",
+            autoscaling["routing_service"]["min"],
+            autoscaling["routing_service"]["max"],
+            autoscaling["routing_service"]["target_cpu"],
+        )
+
+        self.configure_autoscaling_for_service(
+            "delivery-service",
+            autoscaling["delivery_service"]["min"],
+            autoscaling["delivery_service"]["max"],
+            autoscaling["delivery_service"]["target_cpu"],
+        )
     def wait_for_api(self, timeout_seconds: int = 1200):
         dns = self.state["alb"]["dns_name"]
         url = f"http://{dns}/"

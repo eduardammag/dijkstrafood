@@ -41,7 +41,7 @@ services:
       DB_HOST: postgres
       DB_NAME: dijkstrafood
       DB_USER: postgres
-      DB_PASSWORD: postgres
+      DB_PASSWORD: postgres12345
       DB_PORT: 5432
       DB_SSLMODE: disable
       RABBITMQ_HOST: rabbitmq

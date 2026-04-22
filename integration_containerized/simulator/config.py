@@ -90,7 +90,7 @@ SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
 DEFAULT_CONFIG = SimulatorConfig(
     api=ApiConfig(
         base_url=config["api_url"],
-        timeout_seconds=10.0,
+        timeout_seconds=20.0,
     ),
     population=PopulationConfig(
         admins=1,

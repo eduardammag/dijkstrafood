@@ -98,3 +98,6 @@ class ApiClient:
 
     async def get_order(self, order_id: int) -> RequestResult:
         return await self._request("GET", f"/orders/{order_id}")
+    
+    async def get_order_status(self, order_id: int) -> RequestResult:
+        return await self._request("GET", f"/orders/{order_id}/status")
