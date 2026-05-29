@@ -145,14 +145,17 @@ def print_load_test_result(result) -> None:
 async def async_main(scenario_name: str) -> None:
     config = build_config(scenario_name)
     api_client = ApiClient(config)
-    metrics = MetricsCollector()
+    # Metrics for load test only (setup metrics are not reported)
+    load_test_metrics = MetricsCollector()
+    # Metrics for setup (admins, clients, couriers, restaurants) - not reported
+    setup_metrics = MetricsCollector()
 
     print(f"\nStarting simulator with scenario: {scenario_name}")
     print(f"API Base URL: {config.api.base_url}")
 
     # POPULATE SYSTEM
     print("\nCreating admins...")
-    admins = populate_admins(api_client, config.population.admins, metrics)
+    admins = populate_admins(api_client, config.population.admins, setup_metrics)
 
     if not admins:
         raise RuntimeError("No admins were created; cannot continue")
@@ -160,13 +163,13 @@ async def async_main(scenario_name: str) -> None:
     creator_admin = admins[0]
 
     print("Creating clients...")
-    clients = populate_clients(api_client, config.population.clients, metrics)
+    clients = populate_clients(api_client, config.population.clients, setup_metrics)
 
     print("Creating couriers...")
     courier_users, courier_user_ids = populate_couriers(
         api_client,
         config.population.couriers,
-        metrics,
+        setup_metrics,
     )
 
     print("Creating restaurants...")
@@ -174,7 +177,7 @@ async def async_main(scenario_name: str) -> None:
         api_client,
         config.population.restaurants,
         creator_user_id=creator_admin.user_id,
-        metrics=metrics,
+        metrics=setup_metrics,
     )
 
     print_population_summary(admins, clients, courier_users, restaurants)
@@ -185,7 +188,7 @@ async def async_main(scenario_name: str) -> None:
     runner = LoadRunner(
         config=config,
         api_client=api_client,
-        metrics=metrics,
+        metrics=load_test_metrics,
         clients=clients,
         restaurants=restaurants,
     )
@@ -196,10 +199,10 @@ async def async_main(scenario_name: str) -> None:
     from report import print_load_test_summary, print_metrics, export_json_report
 
     print_load_test_summary(load_test_result)
-    print_metrics(metrics)
+    print_metrics(load_test_metrics)
 
     if config.metrics.export_json:
-        export_json_report(load_test_result, metrics, config.metrics.output_dir)
+        export_json_report(load_test_result, load_test_metrics, config.metrics.output_dir)
 
 
 def parse_args():
