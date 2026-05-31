@@ -130,53 +130,20 @@ def print_load_test_result(result) -> None:
 
 async def async_main(scenario_name: str) -> None:
     config = build_config(scenario_name)
-<<<<<<< HEAD
-    api_client = ApiClient(config)
-    # Metrics for load test only (setup metrics are not reported)
-    load_test_metrics = MetricsCollector()
-    # Metrics for setup (admins, clients, couriers, restaurants) - not reported
-    setup_metrics = MetricsCollector()
-=======
     metrics = MetricsCollector()
->>>>>>> mari/deploy_aws
 
     async with ApiClient(config) as api_client:
         print(f"\nStarting simulator with scenario: {scenario_name}")
         print(f"API Base URL: {config.api.base_url}")
 
-<<<<<<< HEAD
-    # POPULATE SYSTEM
-    print("\nCreating admins...")
-    admins = populate_admins(api_client, config.population.admins, setup_metrics)
-=======
         print("\nCreating admins...")
         admins = await populate_admins(api_client, config.population.admins, metrics)
->>>>>>> mari/deploy_aws
 
         if not admins:
             raise RuntimeError("No admins were created; cannot continue")
 
         creator_admin = admins[0]
 
-<<<<<<< HEAD
-    print("Creating clients...")
-    clients = populate_clients(api_client, config.population.clients, setup_metrics)
-
-    print("Creating couriers...")
-    courier_users, courier_user_ids = populate_couriers(
-        api_client,
-        config.population.couriers,
-        setup_metrics,
-    )
-
-    print("Creating restaurants...")
-    restaurants = populate_restaurants(
-        api_client,
-        config.population.restaurants,
-        creator_user_id=creator_admin.user_id,
-        metrics=setup_metrics,
-    )
-=======
         print("Creating clients...")
         clients = await populate_clients(api_client, config.population.clients, metrics)
 
@@ -194,21 +161,11 @@ async def async_main(scenario_name: str) -> None:
             creator_user_id=creator_admin.user_id,
             metrics=metrics,
         )
->>>>>>> mari/deploy_aws
 
         print_population_summary(admins, clients, courier_users, restaurants)
 
         print("\nStarting load test...")
 
-<<<<<<< HEAD
-    runner = LoadRunner(
-        config=config,
-        api_client=api_client,
-        metrics=load_test_metrics,
-        clients=clients,
-        restaurants=restaurants,
-    )
-=======
         runner = LoadRunner(
             config=config,
             api_client=api_client,
@@ -216,25 +173,16 @@ async def async_main(scenario_name: str) -> None:
             clients=clients,
             restaurants=restaurants,
         )
->>>>>>> mari/deploy_aws
 
         load_test_result = await runner.run()
 
         from report import print_load_test_summary, print_metrics, export_json_report
 
-<<<<<<< HEAD
-    print_load_test_summary(load_test_result)
-    print_metrics(load_test_metrics)
-
-    if config.metrics.export_json:
-        export_json_report(load_test_result, load_test_metrics, config.metrics.output_dir)
-=======
         print_load_test_summary(load_test_result)
         print_metrics(metrics)
 
         if config.metrics.export_json:
             export_json_report(load_test_result, metrics, config.metrics.output_dir)
->>>>>>> mari/deploy_aws
 
 
 def parse_args():
