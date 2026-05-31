@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from typing import Literal
+import json
 
+with open("../deployment_state.json", "r") as f:
+    config = json.load(f)
 
-ScenarioName = Literal["normal", "peak", "special"]
+ScenarioName = Literal["teste", "normal", "peak", "special"]
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,12 @@ class SimulatorConfig:
     scenario: ScenarioConfig
 
 
+TESTE_SCENARIO = ScenarioConfig(
+    name="teste",
+    orders_per_second=1,
+    duration_seconds=1,
+)
+
 NORMAL_SCENARIO = ScenarioConfig(
     name="normal",
     orders_per_second=10,
@@ -78,6 +87,7 @@ SPECIAL_SCENARIO = ScenarioConfig(
 
 
 SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
+    "teste": TESTE_SCENARIO,
     "normal": NORMAL_SCENARIO,
     "peak": PEAK_SCENARIO,
     "special": SPECIAL_SCENARIO,
@@ -86,14 +96,14 @@ SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
 
 DEFAULT_CONFIG = SimulatorConfig(
     api=ApiConfig(
-        base_url="http://dijkfood-demo-alb-1052284763.us-east-1.elb.amazonaws.com",
-        timeout_seconds=10.0,
+        base_url=config["api_url"],
+        timeout_seconds=20.0,
     ),
     population=PopulationConfig(
         admins=1,
-        clients=300,
-        restaurants=50,
-        couriers=900,  # 3x mais entregadores que clientes
+        clients=50,
+        restaurants=20,
+        couriers=100,
     ),
     delivery_flow=DeliveryFlowConfig(
         preparing_delay_seconds=0.5,

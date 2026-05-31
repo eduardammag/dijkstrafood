@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dijkstrafood-postgres
+    environment:
+      POSTGRES_DB: dijkstrafood
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dijkstrafood"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./order-service
+    container_name: dijkstrafood-api
+    environment:
+      USE_DYNAMO: "True"
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      DYNAMO_TABLE: ${DYNAMO_TABLE}
+      DB_HOST: postgres
+      DB_NAME: dijkstrafood
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_PORT: 5432
+      DB_SSLMODE: disable
+      RESTAURANT_SIMULATOR_URL: http://restaurant-simulator:8004
+      REQUEST_TIMEOUT_SECONDS: 15
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  restaurant-simulator:
+    build: ./restaurant-simulator
+    container_name: dijkstrafood-restaurant-simulator
+    environment:
+      API_URL: http://api:8000
+      DELIVERY_SERVICE_URL: http://delivery-service:8001
+      REQUEST_TIMEOUT_SECONDS: 15
+      ACCEPTANCE_RATE: 1.0
+      CONFIRMED_DELAY_SECONDS: 0.4
+      PREPARING_DELAY_SECONDS: 0.8
+    ports:
+      - "8004:8004"
+    depends_on:
+      api:
+        condition: service_started
+      delivery-service:
+        condition: service_started
+
+  routing-service:
+    build:
+      context: ./delivery-service
+      dockerfile: routing_service/Dockerfile
+    container_name: dijkstrafood-routing-service
+    ports:
+      - "8002:8002"
+
+  delivery-service:
+    build: ./delivery-service
+    container_name: dijkstrafood-delivery-service
+    environment:
+      API_URL: http://api:8000
+      ROUTING_URL: http://routing-service:8002/rota
+      COURIER_SIMULATOR_URL: http://courier-simulator:8005
+      REQUEST_TIMEOUT_SECONDS: 15
+    ports:
+      - "8001:8001"
+    depends_on:
+      api:
+        condition: service_started
+      routing-service:
+        condition: service_started
+      courier-simulator:
+        condition: service_started
+
+  courier-simulator:
+    build: ./courier-simulator
+    container_name: dijkstrafood-courier-simulator
+    environment:
+      API_URL: http://api:8000
+      REQUEST_TIMEOUT_SECONDS: 15
+      MOVE_INTERVAL: 0.3
+      IGNORE_LOCATION_ERRORS: "true"
+    ports:
+      - "8005:8005"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:
