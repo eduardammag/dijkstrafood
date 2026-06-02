@@ -56,9 +56,19 @@ def trigger_delivery_dispatch(order_id: int):
     response.raise_for_status()
 
 
+def try_trigger_delivery_dispatch(order_id: int) -> bool:
+    try:
+        trigger_delivery_dispatch(order_id)
+        return True
+    except Exception as exc:
+        print(f"Delivery dispatch failed for order {order_id}: {exc}")
+        return False
+
+
 def simulate_restaurant(order_id: int):
     try:
         current_status = get_order_status(order_id)
+        delivery_dispatched = False
 
         if current_status in {"DELIVERED", "REJECTED"}:
             return
@@ -76,10 +86,12 @@ def simulate_restaurant(order_id: int):
             current_status = "PREPARING"
 
         if current_status == "PREPARING":
+            delivery_dispatched = try_trigger_delivery_dispatch(order_id)
             time.sleep(PREPARING_DELAY_SECONDS)
             update_order_status(order_id, "READY_FOR_PICKUP")
 
-        trigger_delivery_dispatch(order_id)
+        if not delivery_dispatched:
+            try_trigger_delivery_dispatch(order_id)
 
     except Exception as exc:
         print(f"Restaurant simulation failed for order {order_id}: {exc}")

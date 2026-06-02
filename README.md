@@ -24,7 +24,7 @@ Load Simulator
 Responsabilidades:
 
 - `order-service`: API principal, persistencia, status, pedidos, usuarios, restaurantes, entregadores e localizacao.
-- `restaurant-simulator`: simula aceite/rejeicao, preparo/tempo operacional e aciona o despacho quando o pedido fica pronto.
+- `restaurant-simulator`: simula aceite/rejeicao, preparo/tempo operacional e aciona o despacho quando o pedido começa a ser preparado.
 - `delivery_service`: serviço de sistema que escolhe entregador, calcula rotas e atribui o pedido.
 - `routing-service`: calcula rotas.
 - `courier-simulator`: simula deslocamento do entregador, atualiza localizacao e status de entrega.

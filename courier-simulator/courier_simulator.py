@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 API_URL = os.getenv("API_URL", "http://api:8000").rstrip("/")
 MOVE_INTERVAL = float(os.getenv("MOVE_INTERVAL", "0.3"))
+PICKUP_WAIT_INTERVAL = float(os.getenv("PICKUP_WAIT_INTERVAL", "0.5"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
 IGNORE_LOCATION_ERRORS = os.getenv("IGNORE_LOCATION_ERRORS", "true").lower() == "true"
 
@@ -32,6 +33,16 @@ def update_order_status(order_id: int, status: str):
     )
     response.raise_for_status()
     print(f"Order {order_id} -> {status}")
+
+
+def get_order_status(order_id: int) -> str:
+    response = requests.get(
+        f"{API_URL}/orders/{order_id}/status",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json().get("order", {})
+    return str(payload.get("order_status", "")).upper()
 
 
 def post_courier_location(courier_id: int, lat: float, lon: float, order_id: int):
@@ -65,23 +76,40 @@ def normalize_route_point(point: Any) -> tuple[float, float]:
     raise ValueError(f"Invalid route point: {point}")
 
 
+def wait_until_ready_for_pickup(order_id: int) -> str:
+    while True:
+        current_status = get_order_status(order_id)
+
+        if current_status in {"READY_FOR_PICKUP", "PICKED_UP", "IN_TRANSIT", "DELIVERED"}:
+            return current_status
+        if current_status == "REJECTED":
+            raise RuntimeError(f"Order {order_id} was rejected before pickup")
+
+        time.sleep(PICKUP_WAIT_INTERVAL)
+
+
 def simulate_delivery(body: DeliverySimulationRequest):
     try:
-        update_order_status(body.order_id, "PICKED_UP")
-
         for point in body.route_to_pickup:
             lat, lon = normalize_route_point(point)
             post_courier_location(body.courier_id, lat, lon, body.order_id)
             time.sleep(MOVE_INTERVAL)
 
-        update_order_status(body.order_id, "IN_TRANSIT")
+        pickup_status = wait_until_ready_for_pickup(body.order_id)
+        if pickup_status == "READY_FOR_PICKUP":
+            update_order_status(body.order_id, "PICKED_UP")
+
+        transit_status = get_order_status(body.order_id)
+        if transit_status not in {"IN_TRANSIT", "DELIVERED"}:
+            update_order_status(body.order_id, "IN_TRANSIT")
 
         for point in body.route_to_delivery:
             lat, lon = normalize_route_point(point)
             post_courier_location(body.courier_id, lat, lon, body.order_id)
             time.sleep(MOVE_INTERVAL)
 
-        update_order_status(body.order_id, "DELIVERED")
+        if get_order_status(body.order_id) != "DELIVERED":
+            update_order_status(body.order_id, "DELIVERED")
 
     except Exception as exc:
         print(f"Courier simulation failed for order {body.order_id}: {exc}")
