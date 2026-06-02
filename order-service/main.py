@@ -27,6 +27,9 @@ DB_SSLMODE = os.getenv("DB_SSLMODE", "disable")
 DYNAMO_TABLE = os.getenv("DYNAMO_TABLE", "CourierLocation")
 USE_DYNAMO = os.getenv("USE_DYNAMO", "false").lower() == "true"
 
+ANALYTICS_ENABLED = os.getenv("ANALYTICS_ENABLED", "false").lower() == "true"
+KINESIS_STREAM_NAME = os.getenv("KINESIS_STREAM_NAME", "").strip()
+
 RESTAURANT_SIMULATOR_URL = os.getenv("RESTAURANT_SIMULATOR_URL", "http://restaurant-simulator:8004").rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
 
@@ -35,6 +38,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 realtime_table = None
+analytics_stream = None
 
 
 class Item(BaseModel):
@@ -103,6 +107,20 @@ def init_dynamo():
         print(f"DynamoDB unavailable, disabling: {exc}")
         realtime_table = None
         USE_DYNAMO = False
+
+
+def init_analytics_stream():
+    global analytics_stream
+
+    if not ANALYTICS_ENABLED:
+        print("Analytics stream disabled by configuration")
+        return
+    if not KINESIS_STREAM_NAME:
+        print("Analytics enabled but KINESIS_STREAM_NAME is empty; disabling event publishing")
+        return
+
+    analytics_stream = boto3.client("kinesis", region_name=AWS_REGION)
+    print(f"Analytics stream configured: {KINESIS_STREAM_NAME}")
 
 
 def get_connection():
@@ -265,6 +283,7 @@ def insert_order_event(
             longitude
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING event_id, created_at
         """,
         (
             order_id,
@@ -276,6 +295,36 @@ def insert_order_event(
             longitude,
         ),
     )
+    event_id, created_at = cur.fetchone()
+
+    publish_order_event(
+        {
+            "event_id": event_id,
+            "order_id": order_id,
+            "event_type": event_type,
+            "from_status": from_status,
+            "to_status": to_status,
+            "event_status": to_status or from_status,
+            "event_message": event_message,
+            "latitude": latitude,
+            "longitude": longitude,
+            "created_at": created_at.replace(tzinfo=timezone.utc).isoformat() if created_at else None,
+        }
+    )
+
+
+def publish_order_event(event: dict):
+    if not ANALYTICS_ENABLED or analytics_stream is None:
+        return
+
+    try:
+        analytics_stream.put_record(
+            StreamName=KINESIS_STREAM_NAME,
+            Data=(json.dumps(event, default=str) + "\n").encode("utf-8"),
+            PartitionKey=str(event["order_id"]),
+        )
+    except Exception as exc:
+        print(f"Analytics event publish failed: {exc}")
 
 
 def notify_restaurant_simulator(order_id: int, restaurant_id: int, client_id: int):
@@ -297,6 +346,7 @@ async def lifespan(app: FastAPI):
     print("Starting API application")
 
     init_dynamo()
+    init_analytics_stream()
 
     try:
         init_db()
