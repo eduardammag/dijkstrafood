@@ -6,7 +6,8 @@ O DijkFood e um sistema distribuido para demonstrar uma arquitetura de delivery 
 
 - Servicos do sistema orquestram o fluxo do pedido por APIs HTTP.
 - Simuladores executam comportamento artificial, como preparo, aceite operacional, movimentacao do entregador e mudancas temporizadas de status.
-- A solucao final nao usa RabbitMQ, PubSub ou broker. Toda integracao entre componentes e HTTP.
+- A integracao de negocio entre componentes segue HTTP.
+- Para observabilidade em tempo real, eventos de ciclo de vida de pedidos sao publicados em AWS Kinesis Data Streams.
 
 ## Arquitetura
 
@@ -17,25 +18,66 @@ Load Simulator
   -> API / Order Service
   -> Restaurant Simulator
   -> Delivery Service
-  -> Courier Simulator
+  -> Restaurant Simulator (/deliveries)
   -> API / Order Service
+  -> Kinesis Data Stream (eventos)
+  -> Realtime Metrics Service
+  -> Dashboard Web (tempo real)
 ```
 
 Responsabilidades:
 
 - `order-service`: API principal, persistencia, status, pedidos, usuarios, restaurantes, entregadores e localizacao.
-- `restaurant-simulator`: simula aceite/rejeicao, preparo/tempo operacional e aciona o despacho quando o pedido começa a ser preparado.
+- `restaurant-simulator`: simula aceite/rejeicao, preparo/tempo operacional, aciona o despacho e tambem simula o deslocamento do entregador (`/deliveries`).
 - `delivery_service`: serviço de sistema que escolhe entregador, calcula rotas e atribui o pedido.
 - `routing-service`: calcula rotas.
-- `courier-simulator`: simula deslocamento do entregador, atualiza localizacao e status de entrega.
+- `realtime-metrics-service`: consome eventos do Kinesis, agrega métricas em memória e expõe API + WebSocket para dashboard.
 - `simulator`: gerador de carga/populacao.
+
+## Dashboard em Tempo Real
+
+Foi adicionada uma camada isolada de observabilidade sem alterar a lógica de negócio existente.
+
+Componente:
+
+- `realtime-metrics-service` (FastAPI + boto3)
+  - Consome continuamente eventos do Kinesis Data Stream.
+  - Detecta automaticamente o formato dos eventos recebidos.
+  - Mantém métricas em memória (sem DynamoDB para métricas realtime).
+  - API HTTP:
+    - `GET /metrics`
+    - `GET /dashboard`
+  - WebSocket:
+    - `GET /ws`
+
+Indicadores implementados:
+
+- Pedidos em `PREPARING`
+- Pedidos aguardando entregador
+- Pedidos em `DELIVERING` (mapeado de `PICKED_UP`, `IN_TRANSIT` e `DELIVERING`)
+- Pedidos concluidos (`DELIVERED`)
+- Pedidos criados por minuto
+- Total de pedidos processados
+- Latencia media de ingestao (evento -> consumer, janela de 1 minuto)
+- Latencia ponta a ponta no dashboard (evento -> browser)
+
+Observacao sobre autodeteccao de formato:
+
+- O serviço identifica automaticamente o formato dos eventos do stream por heurística de campos.
+- Formatos atualmente suportados:
+  - `flat_order_event` (ex.: `order_id`, `event_type`, `from_status`, `to_status`)
+  - `status_update` (ex.: `order_id`, `status`)
+  - `nested_order` (ex.: `order.order_id`, `order.order_status`)
+  - `courier_availability` (ex.: `courier_id`, `is_available`)
+  - `courier_location` (ex.: `courier_id`, `latitude`, `longitude`, `order_id`)
+- O resultado da autodeteccao fica disponível em `meta.detected_event_formats` dentro de `GET /metrics`.
 
 ## Deploy
 
 O deploy automatizado usa:
 
 ```bash
-python deploy.py --config config.json
+python deploy.py --config config.json --run-simulator --scenario normal
 ```
 
 Imagens esperadas pelo `config.json`:
@@ -45,7 +87,6 @@ marimarifr/dijkstrafood-api:latest
 marimarifr/dijkstrafood-restaurant-simulator:latest
 marimarifr/dijkstrafood-delivery-service:latest
 marimarifr/dijkstrafood-routing-service:latest
-marimarifr/dijkstrafood-courier-simulator:latest
 ```
 
 Build/push das imagens:
@@ -55,13 +96,13 @@ docker build -t marimarifr/dijkstrafood-api:latest ./order-service
 docker build -t marimarifr/dijkstrafood-restaurant-simulator:latest ./restaurant-simulator
 docker build -t marimarifr/dijkstrafood-delivery-service:latest ./delivery-service
 docker build -t marimarifr/dijkstrafood-routing-service:latest -f ./delivery-service/routing_service/Dockerfile ./delivery-service
-docker build -t marimarifr/dijkstrafood-courier-simulator:latest ./courier-simulator
+docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest ./realtime-metrics-service
 
 docker push marimarifr/dijkstrafood-api:latest
 docker push marimarifr/dijkstrafood-restaurant-simulator:latest
 docker push marimarifr/dijkstrafood-delivery-service:latest
 docker push marimarifr/dijkstrafood-routing-service:latest
-docker push marimarifr/dijkstrafood-courier-simulator:latest
+docker push marimarifr/dijkstrafood-realtime-metrics-service:latest
 ```
 
 O ambiente local usa:
@@ -70,9 +111,74 @@ O ambiente local usa:
 docker compose up --build
 ```
 
+No ambiente local, o `docker-compose.yml` inclui LocalStack para Kinesis e um container de inicializacao (`kinesis-init`) para criar o stream automaticamente.
+
+Dashboard e API de métricas:
+
+- Dashboard: `http://localhost:8010/dashboard`
+- Métricas JSON: `http://localhost:8010/metrics`
+
+Variáveis de ambiente para o `realtime-metrics-service`:
+
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN` (opcional)
+- `KINESIS_STREAM_NAME`
+- `KINESIS_ENDPOINT_URL` (opcional, usado no local com LocalStack)
+- `KINESIS_ITERATOR_TYPE` (opcional, default `LATEST`)
+- `KINESIS_POLL_INTERVAL_SECONDS` (opcional, default `1`)
+- `KINESIS_RECORDS_LIMIT` (opcional, default `500`)
+
+Variáveis de ambiente adicionais no `order-service` para publicação de eventos:
+
+- `KINESIS_ENABLED` (default `true`)
+- `KINESIS_STREAM_NAME`
+- `KINESIS_ENDPOINT_URL` (opcional)
+
 Para mandar somente 1 pedido pelo simulador:
 
 ```bash
 cd simulator
 python main.py --scenario teste
 ```
+
+Para medir latencia realtime (p50/p95) automaticamente:
+
+```bash
+cd simulator
+python latency_benchmark.py --scenario teste --sample-interval 1 --post-capture-seconds 15 --export-json
+```
+
+## AWS - Recursos Necessários
+
+Para o dashboard realtime funcionar em EC2 ou ECS, os recursos abaixo precisam existir:
+
+1. Kinesis Data Stream com nome igual à variável `KINESIS_STREAM_NAME`.
+2. Credenciais/IAM com permissões mínimas:
+  - `kinesis:DescribeStream`
+  - `kinesis:ListShards`
+  - `kinesis:GetShardIterator`
+  - `kinesis:GetRecords`
+3. Rede liberada para saída HTTPS do container para endpoint do Kinesis.
+
+Deploy em EC2:
+
+- Executar o container `realtime-metrics-service` com as variáveis acima.
+
+Deploy em ECS:
+
+- Publicar a imagem Docker do `realtime-metrics-service`.
+- Criar task/service ECS com porta `8010`.
+- Injetar as variáveis de ambiente e anexar role com permissões de leitura no Kinesis.
+
+## Configuracao de Deploy
+
+Os arquivos `config.json`, `config_req.json` e `config.json.example` agora suportam:
+
+- `dockerhub_images.realtime_metrics_service`
+- bloco `kinesis` (nome do stream, shard count e parametros do consumer)
+- `ecs.desired_count_realtime_metrics_service`
+- `autoscaling.realtime_metrics_service`
+
+O `deploy.py` cria automaticamente o stream Kinesis e publica o endpoint do dashboard em `http://<alb>:8010/dashboard`.

@@ -24,7 +24,7 @@ API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 ROUTING_URL = os.getenv("ROUTING_URL", "http://routing-service:8002/rota")
 COURIER_SIMULATOR_URL = os.getenv(
     "COURIER_SIMULATOR_URL",
-    "http://courier-simulator:8005",
+    "http://restaurant-simulator:8004",
 ).rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
 

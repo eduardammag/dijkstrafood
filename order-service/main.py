@@ -1,4 +1,7 @@
 import os
+import json
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -8,6 +11,7 @@ import boto3
 import psycopg2
 import requests
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -29,12 +33,22 @@ USE_DYNAMO = os.getenv("USE_DYNAMO", "false").lower() == "true"
 
 RESTAURANT_SIMULATOR_URL = os.getenv("RESTAURANT_SIMULATOR_URL", "http://restaurant-simulator:8004").rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
+NOTIFY_TIMEOUT_SECONDS = float(os.getenv("NOTIFY_TIMEOUT_SECONDS", "2"))
+NOTIFY_MAX_ATTEMPTS = int(os.getenv("NOTIFY_MAX_ATTEMPTS", "3"))
+NOTIFY_RETRY_BACKOFF_SECONDS = float(os.getenv("NOTIFY_RETRY_BACKOFF_SECONDS", "0.2"))
+
+KINESIS_STREAM_NAME = os.getenv("KINESIS_STREAM_NAME", "").strip()
+KINESIS_ENDPOINT_URL = os.getenv("KINESIS_ENDPOINT_URL", "").strip() or None
+KINESIS_ENABLED = os.getenv("KINESIS_ENABLED", "true").lower() == "true"
+KINESIS_CONNECT_TIMEOUT_SECONDS = float(os.getenv("KINESIS_CONNECT_TIMEOUT_SECONDS", "1"))
+KINESIS_READ_TIMEOUT_SECONDS = float(os.getenv("KINESIS_READ_TIMEOUT_SECONDS", "1"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 realtime_table = None
+kinesis_client = None
 
 
 class Item(BaseModel):
@@ -103,6 +117,100 @@ def init_dynamo():
         print(f"DynamoDB unavailable, disabling: {exc}")
         realtime_table = None
         USE_DYNAMO = False
+
+
+def init_kinesis():
+    global kinesis_client, KINESIS_ENABLED
+
+    if not KINESIS_ENABLED:
+        print("Kinesis publishing disabled by configuration")
+        return
+
+    if not KINESIS_STREAM_NAME:
+        print("Kinesis stream name not set; disabling Kinesis publishing")
+        KINESIS_ENABLED = False
+        return
+
+    try:
+        client_kwargs = {
+            "service_name": "kinesis",
+            "region_name": AWS_REGION,
+            "config": Config(
+                connect_timeout=KINESIS_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=KINESIS_READ_TIMEOUT_SECONDS,
+                retries={"max_attempts": 1},
+            ),
+        }
+        if KINESIS_ENDPOINT_URL:
+            client_kwargs["endpoint_url"] = KINESIS_ENDPOINT_URL
+
+        kinesis_client = boto3.client(**client_kwargs)
+        print(f"Kinesis publisher enabled: stream={KINESIS_STREAM_NAME}")
+    except Exception as exc:
+        print(f"Kinesis unavailable, disabling publisher: {exc}")
+        kinesis_client = None
+        KINESIS_ENABLED = False
+
+
+def publish_kinesis_event(payload: dict):
+    if not KINESIS_ENABLED or kinesis_client is None:
+        return
+
+    order_id = payload.get("order_id", "unknown")
+    partition_key = str(order_id)
+
+    try:
+        kinesis_client.put_record(
+            StreamName=KINESIS_STREAM_NAME,
+            Data=json.dumps(payload).encode("utf-8"),
+            PartitionKey=partition_key,
+        )
+    except Exception as exc:
+        print(f"Kinesis publish failed: {exc}")
+
+
+def dispatch_kinesis_event_async(payload: dict):
+    threading.Thread(target=publish_kinesis_event, args=(payload,), daemon=True).start()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def publish_order_created_event(order_id: int, client_id: int, restaurant_id: int, status: str):
+    dispatch_kinesis_event_async(
+        {
+            "event_type": "ORDER_CREATED",
+            "order_id": str(order_id),
+            "client_id": client_id,
+            "restaurant_id": restaurant_id,
+            "status": status,
+            "timestamp": utc_now_iso(),
+        }
+    )
+
+
+def publish_order_status_changed_event(order_id: int, old_status: str, new_status: str):
+    dispatch_kinesis_event_async(
+        {
+            "event_type": "ORDER_STATUS_CHANGED",
+            "order_id": str(order_id),
+            "old_status": old_status,
+            "new_status": new_status,
+            "timestamp": utc_now_iso(),
+        }
+    )
+
+
+def publish_courier_assigned_event(order_id: int, courier_id: int):
+    dispatch_kinesis_event_async(
+        {
+            "event_type": "ORDER_COURIER_ASSIGNED",
+            "order_id": str(order_id),
+            "courier_id": courier_id,
+            "timestamp": utc_now_iso(),
+        }
+    )
 
 
 def get_connection():
@@ -287,9 +395,34 @@ def notify_restaurant_simulator(order_id: int, restaurant_id: int, client_id: in
     response = requests.post(
         f"{RESTAURANT_SIMULATOR_URL}/orders",
         json=payload,
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=NOTIFY_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
+
+
+def notify_restaurant_simulator_with_retry(order_id: int, restaurant_id: int, client_id: int):
+    last_error = None
+    for attempt in range(1, NOTIFY_MAX_ATTEMPTS + 1):
+        try:
+            notify_restaurant_simulator(order_id, restaurant_id, client_id)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < NOTIFY_MAX_ATTEMPTS:
+                time.sleep(NOTIFY_RETRY_BACKOFF_SECONDS * attempt)
+
+    print(
+        f"Restaurant simulator notification failed for order {order_id} "
+        f"after {NOTIFY_MAX_ATTEMPTS} attempts: {last_error}"
+    )
+
+
+def dispatch_restaurant_notification_async(order_id: int, restaurant_id: int, client_id: int):
+    threading.Thread(
+        target=notify_restaurant_simulator_with_retry,
+        args=(order_id, restaurant_id, client_id),
+        daemon=True,
+    ).start()
 
 
 @asynccontextmanager
@@ -297,6 +430,7 @@ async def lifespan(app: FastAPI):
     print("Starting API application")
 
     init_dynamo()
+    init_kinesis()
 
     try:
         init_db()
@@ -602,10 +736,17 @@ def create_order(order: OrderRequest):
                     event_message="Order created and waiting for restaurant simulation",
                 )
 
-        notify_restaurant_simulator(
+        dispatch_restaurant_notification_async(
             order_id=order_id,
             restaurant_id=order.restaurant_id,
             client_id=order.client_id,
+        )
+
+        publish_order_created_event(
+            order_id=order_id,
+            client_id=order.client_id,
+            restaurant_id=order.restaurant_id,
+            status=initial_status,
         )
 
         return {
@@ -614,11 +755,6 @@ def create_order(order: OrderRequest):
             "order_status": initial_status,
         }
 
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Order {order_id} created, but restaurant simulator notification failed: {exc}",
-        )
     except Exception as exc:
         if conn is not None:
             conn.rollback()
@@ -673,6 +809,12 @@ def update_status(order_id: int, body: StatusUpdate):
                         "UPDATE couriers SET is_available = TRUE WHERE user_id = %s",
                         (courier_id,),
                     )
+
+        publish_order_status_changed_event(
+            order_id=order_id,
+            old_status=current_status,
+            new_status=new_status,
+        )
 
         return {"message": "Status updated", "status": new_status}
 
@@ -895,6 +1037,8 @@ def assign_courier(order_id: int, body: AssignCourierRequest):
                     to_status=None,
                     event_message=f"Courier {body.courier_id} assigned",
                 )
+
+        publish_courier_assigned_event(order_id=order_id, courier_id=body.courier_id)
 
         return {
             "message": "Courier assigned",

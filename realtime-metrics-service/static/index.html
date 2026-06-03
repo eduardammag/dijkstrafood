@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DijkFood Realtime Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f4f6f8;
+      color: #1f2937;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 24px;
+    }
+
+    .status {
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .card h2 {
+      margin: 0;
+      font-size: 14px;
+      color: #4b5563;
+    }
+
+    .value {
+      margin-top: 8px;
+      font-size: 28px;
+      font-weight: bold;
+    }
+
+    .meta {
+      margin-top: 20px;
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 13px;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 8px 0 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>DijkFood - Dashboard em Tempo Real</h1>
+  <div id="status" class="status">Conectando...</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Pedidos em PREPARING</h2>
+      <div class="value" id="orders_preparing">0</div>
+    </div>
+    <div class="card">
+      <h2>Pedidos aguardando entregador</h2>
+      <div class="value" id="orders_waiting_courier">0</div>
+    </div>
+    <div class="card">
+      <h2>Pedidos em DELIVERING</h2>
+      <div class="value" id="orders_delivering">0</div>
+    </div>
+    <div class="card">
+      <h2>Pedidos concluidos</h2>
+      <div class="value" id="orders_completed">0</div>
+    </div>
+    <div class="card">
+      <h2>Pedidos criados por minuto</h2>
+      <div class="value" id="orders_created_per_minute">0</div>
+    </div>
+    <div class="card">
+      <h2>Total de pedidos processados</h2>
+      <div class="value" id="total_orders_processed">0</div>
+    </div>
+    <div class="card">
+      <h2>Latencia evento - consumer (media 1m)</h2>
+      <div class="value" id="event_to_consumer_latency_ms_avg_1m">0 ms</div>
+    </div>
+    <div class="card">
+      <h2>Latencia evento - dashboard (agora)</h2>
+      <div class="value" id="event_to_dashboard_latency_ms">0 ms</div>
+    </div>
+  </div>
+
+  <div class="meta">
+    <strong>Metadados de ingestao:</strong>
+    <pre id="meta"></pre>
+  </div>
+
+  <script>
+    const statusNode = document.getElementById("status");
+    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${wsProtocol}://${window.location.host}/ws`;
+
+    function updateMetric(id, value) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = String(value ?? 0);
+      }
+    }
+
+    function updateLatency(id, value) {
+      const el = document.getElementById(id);
+      if (el) {
+        const numeric = Number(value || 0);
+        el.textContent = `${Math.max(0, Math.round(numeric))} ms`;
+      }
+    }
+
+    function updateDashboard(payload) {
+      updateMetric("orders_preparing", payload.orders_preparing);
+      updateMetric("orders_waiting_courier", payload.orders_waiting_courier);
+      updateMetric("orders_delivering", payload.orders_delivering);
+      updateMetric("orders_completed", payload.orders_completed ?? payload.orders_delivered);
+      updateMetric("orders_created_per_minute", payload.orders_created_per_minute);
+      updateMetric("total_orders_processed", payload.total_orders_processed);
+      updateLatency("event_to_consumer_latency_ms_avg_1m", payload.event_to_consumer_latency_ms_avg_1m);
+
+      const producedAtMs = payload?.meta?.last_event_produced_at_ms;
+      if (producedAtMs) {
+        updateLatency("event_to_dashboard_latency_ms", Date.now() - producedAtMs);
+      } else {
+        updateLatency("event_to_dashboard_latency_ms", 0);
+      }
+
+      const meta = payload.meta || {};
+      document.getElementById("meta").textContent = JSON.stringify(meta, null, 2);
+    }
+
+    function connect() {
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        statusNode.textContent = "Conectado ao stream de metricas";
+        statusNode.style.color = "#065f46";
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          updateDashboard(payload);
+        } catch (err) {
+          console.error("Erro ao processar mensagem", err);
+        }
+      };
+
+      ws.onclose = () => {
+        statusNode.textContent = "Desconectado. Reconectando...";
+        statusNode.style.color = "#b45309";
+        setTimeout(connect, 1500);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send("ping");
+        }
+      }, 10000);
+    }
+
+    connect();
+  </script>
+</body>
+</html>

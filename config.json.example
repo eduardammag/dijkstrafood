@@ -1,13 +1,23 @@
 {
   "region": "us-east-1",
   "project_name": "dijkfood-demo",
+  "api": {
+    "uvicorn_workers": 4
+  },
   "your_ip_cidr": "0.0.0.0/0",
   "dockerhub_images": {
     "api": "SEU_USUARIO/dijkstrafood-api:latest",
     "restaurant_simulator": "SEU_USUARIO/dijkstrafood-restaurant-simulator:latest",
     "delivery_service": "SEU_USUARIO/dijkstrafood-delivery-service:latest",
     "routing_service": "SEU_USUARIO/dijkstrafood-routing-service:latest",
-    "courier_simulator": "SEU_USUARIO/dijkstrafood-courier-simulator:latest"
+    "realtime_metrics_service": "SEU_USUARIO/dijkstrafood-realtime-metrics-service:latest"
+  },
+  "kinesis": {
+    "stream_name": "dijkfood-order-events",
+    "shard_count": 1,
+    "iterator_type": "LATEST",
+    "poll_interval_seconds": 1,
+    "records_limit": 500
   },
   "ecs": {
     "cpu": "1024",
@@ -16,7 +26,7 @@
     "desired_count_restaurant_simulator": 1,
     "desired_count_delivery_service": 1,
     "desired_count_routing_service": 1,
-    "desired_count_courier_simulator": 1,
+    "desired_count_realtime_metrics_service": 1,
     "assign_public_ip": true
   },
   "database": {
@@ -39,27 +49,32 @@
     "api": {
       "min": 1,
       "max": 10,
-      "target_cpu": 60.0
+      "target_cpu": 60.0,
+      "target_memory": 70.0
     },
     "restaurant_simulator": {
       "min": 1,
       "max": 3,
-      "target_cpu": 60.0
+      "target_cpu": 60.0,
+      "target_memory": 70.0
     },
     "routing_service": {
       "min": 1,
       "max": 6,
-      "target_cpu": 60.0
+      "target_cpu": 60.0,
+      "target_memory": 70.0
     },
     "delivery_service": {
       "min": 1,
       "max": 6,
-      "target_cpu": 60.0
+      "target_cpu": 60.0,
+      "target_memory": 70.0
     },
-    "courier_simulator": {
+    "realtime_metrics_service": {
       "min": 1,
-      "max": 6,
-      "target_cpu": 60.0
+      "max": 2,
+      "target_cpu": 60.0,
+      "target_memory": 70.0
     }
   }
 }

@@ -72,6 +72,7 @@ class Deployer:
         self.iam = self.session.client("iam")
         self.sd = self.session.client("servicediscovery")
         self.ddb = self.session.client("dynamodb")
+        self.kinesis = self.session.client("kinesis")
         self.application_autoscaling = self.session.client("application-autoscaling")
         self.state = {"project": self.project, "region": self.region}
 
@@ -141,8 +142,8 @@ class Deployer:
             sgs["alb"],
             [
                 {"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": your_ip_cidr}]},
-                {"IpProtocol": "tcp", "FromPort": 8000, "ToPort": 8005, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
-                {"IpProtocol": "tcp", "FromPort": 8000, "ToPort": 8005, "UserIdGroupPairs": [{"GroupId": sgs["ecs"]}]},
+                {"IpProtocol": "tcp", "FromPort": 8000, "ToPort": 8010, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]},
+                {"IpProtocol": "tcp", "FromPort": 8000, "ToPort": 8010, "UserIdGroupPairs": [{"GroupId": sgs["ecs"]}]},
             ],
         )
         self._ensure_ingress(
@@ -150,7 +151,7 @@ class Deployer:
             [{
                 "IpProtocol": "tcp",
                 "FromPort": 8000,
-                "ToPort": 8005,
+                "ToPort": 8010,
                 "UserIdGroupPairs": [{"GroupId": sgs["alb"]}, {"GroupId": sgs["ecs"]}],
             }],
         )
@@ -195,6 +196,30 @@ class Deployer:
             log(f"DynamoDB {table_name} já existe — limpando dados...")
             self._purge_dynamodb_table(table_name)
         self.state["dynamodb_table"] = table_name
+
+    def create_kinesis_stream(self):
+        kinesis_cfg = self.config.get("kinesis", {})
+        stream_name = kinesis_cfg.get("stream_name", "dijkfood-order-events")
+        shard_count = int(kinesis_cfg.get("shard_count", 1))
+
+        try:
+            self.kinesis.describe_stream_summary(StreamName=stream_name)
+            log(f"Kinesis stream já existe: {stream_name}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code not in {"ResourceNotFoundException", "ValidationException"}:
+                raise
+            log(f"Criando Kinesis stream {stream_name}")
+            self.kinesis.create_stream(StreamName=stream_name, ShardCount=shard_count)
+
+        waiter = self.kinesis.get_waiter("stream_exists")
+        waiter.wait(StreamName=stream_name)
+
+        self.state["kinesis_stream"] = {
+            "name": stream_name,
+            "shard_count": shard_count,
+        }
+        log(f"Kinesis stream pronto: {stream_name}")
 
     def _purge_dynamodb_table(self, table_name: str):
         """Remove todos os itens da tabela DynamoDB via scan + batch_write."""
@@ -462,7 +487,7 @@ class Deployer:
             ("restaurant-simulator", "rsim", 8004),
             ("delivery-service", "ds", 8001),
             ("routing-service", "rt", 8002),
-            ("courier-simulator", "csim", 8005),
+            ("realtime-metrics-service", "rms", 8010),
         ]
 
         internal_tgs = {}
@@ -620,6 +645,7 @@ class Deployer:
         min_capacity: int,
         max_capacity: int,
         target_cpu: float = 60.0,
+        target_memory: float = 70.0,
     ):
         cluster = self.state["ecs_cluster"]
         resource_id = f"service/{cluster}/{service_name}"
@@ -643,8 +669,24 @@ class Deployer:
                 "PredefinedMetricSpecification": {
                     "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
                 },
-                "ScaleInCooldown": 60,
-                "ScaleOutCooldown": 60,
+                "ScaleInCooldown": 120,
+                "ScaleOutCooldown": 30,
+            },
+        )
+
+        self.application_autoscaling.put_scaling_policy(
+            PolicyName=f"{self.project}-{service_name}-memory-target",
+            ServiceNamespace="ecs",
+            ResourceId=resource_id,
+            ScalableDimension="ecs:service:DesiredCount",
+            PolicyType="TargetTrackingScaling",
+            TargetTrackingScalingPolicyConfiguration={
+                "TargetValue": target_memory,
+                "PredefinedMetricSpecification": {
+                    "PredefinedMetricType": "ECSServiceAverageMemoryUtilization"
+                },
+                "ScaleInCooldown": 120,
+                "ScaleOutCooldown": 30,
             },
         )
 
@@ -658,14 +700,14 @@ class Deployer:
         internal_api_base = f"http://{alb_dns}:8000"
         internal_tgs = self.state.get("internal_target_groups", {})
 
-        self.delete_obsolete_services(["restaurant-service", "restaurant-worker"])
+        self.delete_obsolete_services(["restaurant-service", "restaurant-worker", "courier-simulator"])
 
         print(f"[deploy] ALB_BASE           = {alb_base}")
         print(f"[deploy] INTERNAL_API_BASE  = {internal_api_base}")
         print(f"[deploy] DELIVERY_SERVICE_URL   = {alb_base}:8001")
         print(f"[deploy] ROUTING_URL            = {alb_base}:8002/rota")
         print(f"[deploy] RESTAURANT_SIMULATOR_URL = {alb_base}:8004")
-        print(f"[deploy] COURIER_SIMULATOR_URL    = {alb_base}:8005")
+        print(f"[deploy] REALTIME_METRICS_URL     = {alb_base}:8010")
 
         api_env = {
             "USE_DYNAMO": "True",
@@ -679,6 +721,12 @@ class Deployer:
             "DB_SSLMODE": "require",
             "RESTAURANT_SIMULATOR_URL": f"{alb_base}:8004",
             "REQUEST_TIMEOUT_SECONDS": "15",
+            "NOTIFY_TIMEOUT_SECONDS": "2",
+            "NOTIFY_MAX_ATTEMPTS": "3",
+            "NOTIFY_RETRY_BACKOFF_SECONDS": "0.2",
+            "KINESIS_ENABLED": "true",
+            "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
+            "UVICORN_WORKERS": str(self.config.get("api", {}).get("uvicorn_workers", 4)),
         }
         td_api = self.register_task_definition("api", imgs["api"], 8000, api_env)
 
@@ -698,24 +746,30 @@ class Deployer:
         delivery_env = {
             "API_URL": internal_api_base,
             "ROUTING_URL": f"{alb_base}:8002/rota",
-            "COURIER_SIMULATOR_URL": f"{alb_base}:8005",
+            "COURIER_SIMULATOR_URL": f"{alb_base}:8004",
             "REQUEST_TIMEOUT_SECONDS": "15",
         }
         td_delivery = self.register_task_definition("delivery-service", imgs["delivery_service"], 8001, delivery_env)
 
-        courier_simulator_env = {
-            "API_URL": internal_api_base,
-            "REQUEST_TIMEOUT_SECONDS": "15",
-            "MOVE_INTERVAL": "0.3",
-            "IGNORE_LOCATION_ERRORS": "true",
+        realtime_env = {
+            "AWS_REGION": self.region,
+            "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
+            "KINESIS_ITERATOR_TYPE": self.config.get("kinesis", {}).get("iterator_type", "LATEST"),
+            "KINESIS_POLL_INTERVAL_SECONDS": str(self.config.get("kinesis", {}).get("poll_interval_seconds", 1)),
+            "KINESIS_RECORDS_LIMIT": str(self.config.get("kinesis", {}).get("records_limit", 500)),
         }
-        td_courier_simulator = self.register_task_definition("courier-simulator", imgs["courier_simulator"], 8005, courier_simulator_env)
+        td_realtime = self.register_task_definition(
+            "realtime-metrics-service",
+            imgs["realtime_metrics_service"],
+            8010,
+            realtime_env,
+        )
 
         self.create_or_update_service("api", td_api, self.config["ecs"]["desired_count_api"], "api", 8000, attach_to_alb=True)
         self.create_or_update_service("restaurant-simulator", td_restaurant_simulator, self.config["ecs"]["desired_count_restaurant_simulator"], "restaurant-simulator", 8004, attach_to_alb=True, target_group_arn=internal_tgs.get("restaurant-simulator"))
         self.create_or_update_service("routing-service", td_routing, self.config["ecs"]["desired_count_routing_service"], "routing-service", 8002, attach_to_alb=True, target_group_arn=internal_tgs.get("routing-service"))
         self.create_or_update_service("delivery-service", td_delivery, self.config["ecs"]["desired_count_delivery_service"], "delivery-service", 8001, attach_to_alb=True, target_group_arn=internal_tgs.get("delivery-service"))
-        self.create_or_update_service("courier-simulator", td_courier_simulator, self.config["ecs"]["desired_count_courier_simulator"], "courier-simulator", 8005, attach_to_alb=True, target_group_arn=internal_tgs.get("courier-simulator"))
+        self.create_or_update_service("realtime-metrics-service", td_realtime, self.config["ecs"].get("desired_count_realtime_metrics_service", 1), "realtime-metrics-service", 8010, attach_to_alb=True, target_group_arn=internal_tgs.get("realtime-metrics-service"))
 
         autoscaling = self.config.get("autoscaling", {})
 
@@ -724,6 +778,7 @@ class Deployer:
             autoscaling["api"]["min"],
             autoscaling["api"]["max"],
             autoscaling["api"]["target_cpu"],
+            autoscaling["api"].get("target_memory", 70.0),
         )
 
         self.configure_autoscaling_for_service(
@@ -731,6 +786,7 @@ class Deployer:
             autoscaling["restaurant_simulator"]["min"],
             autoscaling["restaurant_simulator"]["max"],
             autoscaling["restaurant_simulator"]["target_cpu"],
+            autoscaling["restaurant_simulator"].get("target_memory", 70.0),
         )
 
         self.configure_autoscaling_for_service(
@@ -738,6 +794,7 @@ class Deployer:
             autoscaling["routing_service"]["min"],
             autoscaling["routing_service"]["max"],
             autoscaling["routing_service"]["target_cpu"],
+            autoscaling["routing_service"].get("target_memory", 70.0),
         )
 
         self.configure_autoscaling_for_service(
@@ -745,14 +802,17 @@ class Deployer:
             autoscaling["delivery_service"]["min"],
             autoscaling["delivery_service"]["max"],
             autoscaling["delivery_service"]["target_cpu"],
+            autoscaling["delivery_service"].get("target_memory", 70.0),
         )
 
-        self.configure_autoscaling_for_service(
-            "courier-simulator",
-            autoscaling["courier_simulator"]["min"],
-            autoscaling["courier_simulator"]["max"],
-            autoscaling["courier_simulator"]["target_cpu"],
-        )
+        if "realtime_metrics_service" in autoscaling:
+            self.configure_autoscaling_for_service(
+                "realtime-metrics-service",
+                autoscaling["realtime_metrics_service"]["min"],
+                autoscaling["realtime_metrics_service"]["max"],
+                autoscaling["realtime_metrics_service"]["target_cpu"],
+                autoscaling["realtime_metrics_service"].get("target_memory", 70.0),
+            )
     def wait_for_api(self, timeout_seconds: int = 1200):
         dns = self.state["alb"]["dns_name"]
         url = f"http://{dns}/"
@@ -774,6 +834,7 @@ class Deployer:
         self.ensure_default_vpc()
         self.create_security_groups()
         self.create_dynamodb()
+        self.create_kinesis_stream()
         self.create_rds()
         self.ensure_cluster()
         try:

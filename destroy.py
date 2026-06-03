@@ -32,6 +32,7 @@ def main():
     ec2 = session.client("ec2")
     rds = session.client("rds")
     ddb = session.client("dynamodb")
+    kinesis = session.client("kinesis")
     sd = session.client("servicediscovery")
     logs = session.client("logs")
     iam = session.client("iam")
@@ -45,6 +46,7 @@ def main():
             "restaurant-simulator",
             "routing-service",
             "delivery-service",
+            "realtime-metrics-service",
             "courier-simulator",
         ]:
             try:
@@ -89,6 +91,10 @@ def main():
     if state.get("dynamodb_table"):
         safe(ddb.delete_table, TableName=state["dynamodb_table"])
 
+    kinesis_stream = state.get("kinesis_stream", {}).get("name")
+    if kinesis_stream:
+        safe(kinesis.delete_stream, StreamName=kinesis_stream, EnforceConsumerDeletion=True)
+
     ns_id = state.get("service_discovery_namespace_id")
     if ns_id:
         services = safe(sd.list_services, Filters=[{"Name": "NAMESPACE_ID", "Values": [ns_id], "Condition": "EQ"}])
@@ -106,6 +112,7 @@ def main():
             "restaurant-simulator",
             "routing-service",
             "delivery-service",
+            "realtime-metrics-service",
             "courier-simulator",
         ]
     ]:

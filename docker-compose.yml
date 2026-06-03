@@ -1,4 +1,16 @@
 services:
+  localstack:
+    image: localstack/localstack:3
+    container_name: dijkstrafood-localstack
+    environment:
+      SERVICES: kinesis
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
   postgres:
     image: postgres:16
     container_name: dijkstrafood-postgres
@@ -21,9 +33,9 @@ services:
     container_name: dijkstrafood-api
     environment:
       USE_DYNAMO: "True"
-      AWS_REGION: ${AWS_REGION}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
       DYNAMO_TABLE: ${DYNAMO_TABLE}
       DB_HOST: postgres
@@ -34,11 +46,16 @@ services:
       DB_SSLMODE: disable
       RESTAURANT_SIMULATOR_URL: http://restaurant-simulator:8004
       REQUEST_TIMEOUT_SECONDS: 15
+      KINESIS_ENABLED: "true"
+      KINESIS_STREAM_NAME: ${KINESIS_STREAM_NAME:-dijkfood-order-events}
+      KINESIS_ENDPOINT_URL: http://localstack:4566
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      localstack:
+        condition: service_started
 
   restaurant-simulator:
     build: ./restaurant-simulator
@@ -55,8 +72,6 @@ services:
     depends_on:
       api:
         condition: service_started
-      delivery-service:
-        condition: service_started
 
   routing-service:
     build:
@@ -72,7 +87,7 @@ services:
     environment:
       API_URL: http://api:8000
       ROUTING_URL: http://routing-service:8002/rota
-      COURIER_SIMULATOR_URL: http://courier-simulator:8005
+      COURIER_SIMULATOR_URL: http://restaurant-simulator:8004
       REQUEST_TIMEOUT_SECONDS: 15
     ports:
       - "8001:8001"
@@ -81,21 +96,42 @@ services:
         condition: service_started
       routing-service:
         condition: service_started
-      courier-simulator:
+      restaurant-simulator:
         condition: service_started
 
-  courier-simulator:
-    build: ./courier-simulator
-    container_name: dijkstrafood-courier-simulator
+  realtime-metrics-service:
+    build: ./realtime-metrics-service
+    container_name: dijkstrafood-realtime-metrics-service
     environment:
-      API_URL: http://api:8000
-      REQUEST_TIMEOUT_SECONDS: 15
-      MOVE_INTERVAL: 0.3
-      IGNORE_LOCATION_ERRORS: "true"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      KINESIS_STREAM_NAME: ${KINESIS_STREAM_NAME:-dijkfood-order-events}
+      KINESIS_ENDPOINT_URL: http://localstack:4566
+      KINESIS_ITERATOR_TYPE: ${KINESIS_ITERATOR_TYPE:-LATEST}
+      KINESIS_POLL_INTERVAL_SECONDS: ${KINESIS_POLL_INTERVAL_SECONDS:-1}
+      KINESIS_RECORDS_LIMIT: ${KINESIS_RECORDS_LIMIT:-500}
     ports:
-      - "8005:8005"
+      - "8010:8010"
     depends_on:
-      api:
+      localstack:
+        condition: service_started
+
+  kinesis-init:
+    image: amazon/aws-cli:2.17.30
+    container_name: dijkstrafood-kinesis-init
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      KINESIS_STREAM_NAME: ${KINESIS_STREAM_NAME:-dijkfood-order-events}
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "until aws --endpoint-url=http://localstack:4566 kinesis list-streams >/dev/null 2>&1; do sleep 1; done;
+      aws --endpoint-url=http://localstack:4566 kinesis create-stream --stream-name $$KINESIS_STREAM_NAME --shard-count 1 || true"
+    depends_on:
+      localstack:
         condition: service_started
 
 volumes:
