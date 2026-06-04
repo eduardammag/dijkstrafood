@@ -80,6 +80,35 @@ O deploy automatizado usa:
 python deploy.py --config config.json --run-simulator --scenario normal
 ```
 
+## Pipeline analitico
+
+Quando `analytics.enabled` esta `true` no `config.json`, o deploy tambem cria:
+
+```text
+Order Service
+  -> Kinesis Data Stream
+  -> Kinesis Firehose
+  -> S3
+  -> Glue Data Catalog
+  -> Athena
+```
+
+O `order-service` publica cada registro de `order_events` no Kinesis. O Firehose grava esses eventos no S3 particionados por `year/month/day/hour`, e a tabela externa do Glue fica disponivel para consultas no Athena.
+
+Exemplo de consulta:
+
+```sql
+SELECT
+  event_status,
+  count(*) AS total
+FROM dijkfood_demo_analytics.order_events
+WHERE year = '2026'
+  AND month = '06'
+  AND day = '02'
+GROUP BY event_status
+ORDER BY total DESC;
+```
+
 Imagens esperadas pelo `config.json`:
 
 ```text

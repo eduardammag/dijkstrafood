@@ -33,6 +33,10 @@ def main():
     rds = session.client("rds")
     ddb = session.client("dynamodb")
     kinesis = session.client("kinesis")
+    s3 = session.client("s3")
+    kinesis = session.client("kinesis")
+    firehose = session.client("firehose")
+    glue = session.client("glue")
     sd = session.client("servicediscovery")
     logs = session.client("logs")
     iam = session.client("iam")
@@ -94,6 +98,36 @@ def main():
     kinesis_stream = state.get("kinesis_stream", {}).get("name")
     if kinesis_stream:
         safe(kinesis.delete_stream, StreamName=kinesis_stream, EnforceConsumerDeletion=True)
+    analytics = state.get("analytics", {})
+    if analytics.get("enabled"):
+        if analytics.get("firehose_name"):
+            safe(firehose.delete_delivery_stream, DeliveryStreamName=analytics["firehose_name"], AllowForceDelete=True)
+            time.sleep(5)
+
+        if analytics.get("glue_database") and analytics.get("glue_table"):
+            safe(glue.delete_table, DatabaseName=analytics["glue_database"], Name=analytics["glue_table"])
+            safe(glue.delete_database, Name=analytics["glue_database"])
+
+        if analytics.get("kinesis_stream_name"):
+            safe(kinesis.delete_stream, StreamName=analytics["kinesis_stream_name"], EnforceConsumerDeletion=True)
+
+        bucket = analytics.get("s3_bucket")
+        if bucket and analytics.get("s3_bucket_created"):
+            while True:
+                listed = safe(s3.list_objects_v2, Bucket=bucket)
+                objects = listed.get("Contents", []) if listed else []
+                if not objects:
+                    break
+                safe(
+                    s3.delete_objects,
+                    Bucket=bucket,
+                    Delete={"Objects": [{"Key": obj["Key"]} for obj in objects]},
+                )
+                if not listed.get("IsTruncated"):
+                    break
+            safe(s3.delete_bucket, Bucket=bucket)
+        elif bucket:
+            log(f"Bucket S3 preservado por nao ter sido criado pelo deploy: {bucket}")
 
     ns_id = state.get("service_discovery_namespace_id")
     if ns_id:

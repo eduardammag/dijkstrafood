@@ -70,9 +70,14 @@ class Deployer:
         self.elbv2 = self.session.client("elbv2")
         self.logs = self.session.client("logs")
         self.iam = self.session.client("iam")
+        self.sts = self.session.client("sts")
         self.sd = self.session.client("servicediscovery")
         self.ddb = self.session.client("dynamodb")
         self.kinesis = self.session.client("kinesis")
+        self.s3 = self.session.client("s3")
+        self.kinesis = self.session.client("kinesis")
+        self.firehose = self.session.client("firehose")
+        self.glue = self.session.client("glue")
         self.application_autoscaling = self.session.client("application-autoscaling")
         self.state = {"project": self.project, "region": self.region}
 
@@ -220,6 +225,203 @@ class Deployer:
             "shard_count": shard_count,
         }
         log(f"Kinesis stream pronto: {stream_name}")
+    def _account_id(self) -> str:
+        return self.sts.get_caller_identity()["Account"]
+
+    def analytics_config(self) -> Dict:
+        cfg = self.config.get("analytics", {})
+        enabled = bool(cfg.get("enabled", False))
+        bucket_name = cfg.get("s3_bucket") or (
+            f"{self.project}-analytics-{self._account_id()}" if enabled else ""
+        )
+        prefix = cfg.get("s3_prefix", "order-events").strip("/")
+        return {
+            "enabled": enabled,
+            "stream_name": cfg.get("stream_name") or f"{self.project}-order-events",
+            "firehose_name": cfg.get("firehose_name") or f"{self.project}-order-events-firehose",
+            "s3_bucket": bucket_name,
+            "s3_prefix": prefix,
+            "glue_database": cfg.get("glue_database") or f"{self.project.replace('-', '_')}_analytics",
+            "glue_table": cfg.get("glue_table") or "order_events",
+            "firehose_role_arn": cfg.get("firehose_role_arn", "").strip(),
+        }
+
+    def create_analytics_pipeline(self):
+        cfg = self.analytics_config()
+        if not cfg["enabled"]:
+            log("Analytics desabilitado no config")
+            self.state["analytics"] = {"enabled": False}
+            return
+
+        stream_arn = self.ensure_kinesis_stream(cfg["stream_name"])
+        bucket_name, bucket_created = self.ensure_analytics_bucket(cfg["s3_bucket"])
+        firehose_role_arn = cfg["firehose_role_arn"] or self.state["iam"]["ecs_task_role_arn"]
+        firehose_arn = self.ensure_firehose_delivery_stream(
+            cfg=cfg,
+            stream_arn=stream_arn,
+            bucket_name=bucket_name,
+            role_arn=firehose_role_arn,
+        )
+        self.ensure_glue_table(cfg, bucket_name)
+
+        self.state["analytics"] = {
+            "enabled": True,
+            "kinesis_stream_name": cfg["stream_name"],
+            "kinesis_stream_arn": stream_arn,
+            "firehose_name": cfg["firehose_name"],
+            "firehose_arn": firehose_arn,
+            "firehose_role_arn": firehose_role_arn,
+            "s3_bucket": bucket_name,
+            "s3_bucket_created": bucket_created,
+            "s3_prefix": cfg["s3_prefix"],
+            "glue_database": cfg["glue_database"],
+            "glue_table": cfg["glue_table"],
+            "athena_table": f"{cfg['glue_database']}.{cfg['glue_table']}",
+        }
+        log(f"Analytics pronto: Athena table {cfg['glue_database']}.{cfg['glue_table']}")
+
+    def ensure_kinesis_stream(self, stream_name: str) -> str:
+        try:
+            desc = self.kinesis.describe_stream_summary(StreamName=stream_name)["StreamDescriptionSummary"]
+            log(f"Kinesis stream existe: {stream_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                raise
+            log(f"Criando Kinesis stream {stream_name}")
+            self.kinesis.create_stream(StreamName=stream_name, ShardCount=1)
+            waiter = self.kinesis.get_waiter("stream_exists")
+            waiter.wait(StreamName=stream_name)
+            desc = self.kinesis.describe_stream_summary(StreamName=stream_name)["StreamDescriptionSummary"]
+        return desc["StreamARN"]
+
+    def ensure_analytics_bucket(self, bucket_name: str) -> tuple[str, bool]:
+        try:
+            self.s3.head_bucket(Bucket=bucket_name)
+            log(f"S3 bucket existe: {bucket_name}")
+            return bucket_name, False
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            log(f"Criando S3 bucket {bucket_name}")
+            kwargs = {"Bucket": bucket_name}
+            if self.region != "us-east-1":
+                kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
+            self.s3.create_bucket(**kwargs)
+            return bucket_name, True
+
+    def ensure_firehose_delivery_stream(self, cfg: Dict, stream_arn: str, bucket_name: str, role_arn: str) -> str:
+        try:
+            desc = self.firehose.describe_delivery_stream(DeliveryStreamName=cfg["firehose_name"])
+            status = desc["DeliveryStreamDescription"]["DeliveryStreamStatus"]
+            log(f"Firehose existe: {cfg['firehose_name']} ({status})")
+            return desc["DeliveryStreamDescription"]["DeliveryStreamARN"]
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                raise
+
+        data_prefix = (
+            f"{cfg['s3_prefix']}/"
+            "year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/"
+        )
+        error_prefix = f"{cfg['s3_prefix']}/errors/!{{firehose:error-output-type}}/"
+
+        log(f"Criando Firehose {cfg['firehose_name']} -> s3://{bucket_name}/{cfg['s3_prefix']}/")
+        resp = self.firehose.create_delivery_stream(
+            DeliveryStreamName=cfg["firehose_name"],
+            DeliveryStreamType="KinesisStreamAsSource",
+            KinesisStreamSourceConfiguration={
+                "KinesisStreamARN": stream_arn,
+                "RoleARN": role_arn,
+            },
+            ExtendedS3DestinationConfiguration={
+                "RoleARN": role_arn,
+                "BucketARN": f"arn:aws:s3:::{bucket_name}",
+                "Prefix": data_prefix,
+                "ErrorOutputPrefix": error_prefix,
+                "BufferingHints": {
+                    "SizeInMBs": 1,
+                    "IntervalInSeconds": 60,
+                },
+                "CompressionFormat": "UNCOMPRESSED",
+            },
+        )
+        return resp["DeliveryStreamARN"]
+
+    def ensure_glue_table(self, cfg: Dict, bucket_name: str):
+        database_name = cfg["glue_database"]
+        table_name = cfg["glue_table"]
+        location = f"s3://{bucket_name}/{cfg['s3_prefix']}/"
+
+        try:
+            self.glue.get_database(Name=database_name)
+            log(f"Glue database existe: {database_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "EntityNotFoundException":
+                raise
+            self.glue.create_database(DatabaseInput={"Name": database_name})
+            log(f"Glue database criado: {database_name}")
+
+        table_input = {
+            "Name": table_name,
+            "TableType": "EXTERNAL_TABLE",
+            "Parameters": {
+                "classification": "json",
+                "projection.enabled": "true",
+                "projection.year.type": "integer",
+                "projection.year.range": "2024,2035",
+                "projection.month.type": "integer",
+                "projection.month.range": "1,12",
+                "projection.month.digits": "2",
+                "projection.day.type": "integer",
+                "projection.day.range": "1,31",
+                "projection.day.digits": "2",
+                "projection.hour.type": "integer",
+                "projection.hour.range": "0,23",
+                "projection.hour.digits": "2",
+                "storage.location.template": (
+                    f"s3://{bucket_name}/{cfg['s3_prefix']}/"
+                    "year=${year}/month=${month}/day=${day}/hour=${hour}/"
+                ),
+            },
+            "PartitionKeys": [
+                {"Name": "year", "Type": "string"},
+                {"Name": "month", "Type": "string"},
+                {"Name": "day", "Type": "string"},
+                {"Name": "hour", "Type": "string"},
+            ],
+            "StorageDescriptor": {
+                "Location": location,
+                "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+                "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+                "SerdeInfo": {
+                    "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+                    "Parameters": {"ignore.malformed.json": "true"},
+                },
+                "Columns": [
+                    {"Name": "event_id", "Type": "int"},
+                    {"Name": "order_id", "Type": "int"},
+                    {"Name": "event_type", "Type": "string"},
+                    {"Name": "from_status", "Type": "string"},
+                    {"Name": "to_status", "Type": "string"},
+                    {"Name": "event_status", "Type": "string"},
+                    {"Name": "event_message", "Type": "string"},
+                    {"Name": "latitude", "Type": "double"},
+                    {"Name": "longitude", "Type": "double"},
+                    {"Name": "created_at", "Type": "string"},
+                ],
+            },
+        }
+
+        try:
+            self.glue.get_table(DatabaseName=database_name, Name=table_name)
+            self.glue.update_table(DatabaseName=database_name, TableInput=table_input)
+            log(f"Glue table atualizada: {database_name}.{table_name}")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "EntityNotFoundException":
+                raise
+            self.glue.create_table(DatabaseName=database_name, TableInput=table_input)
+            log(f"Glue table criada: {database_name}.{table_name}")
 
     def _purge_dynamodb_table(self, table_name: str):
         """Remove todos os itens da tabela DynamoDB via scan + batch_write."""
@@ -728,6 +930,14 @@ class Deployer:
             "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
             "UVICORN_WORKERS": str(self.config.get("api", {}).get("uvicorn_workers", 4)),
         }
+        analytics_state = self.state.get("analytics", {})
+        if analytics_state.get("enabled"):
+            api_env.update(
+                {
+                    "ANALYTICS_ENABLED": "true",
+                    "KINESIS_STREAM_NAME": analytics_state["kinesis_stream_name"],
+                }
+            )
         td_api = self.register_task_definition("api", imgs["api"], 8000, api_env)
 
         restaurant_simulator_env = {
@@ -844,6 +1054,7 @@ class Deployer:
             self.state["service_discovery_namespace_id"] = None
             self.state["service_discovery_namespace_name"] = None
         self.ensure_roles()
+        self.create_analytics_pipeline()
         self.create_alb()
         self.create_internal_alb_targets()
         self.deploy_services()

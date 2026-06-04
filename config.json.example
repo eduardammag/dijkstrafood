@@ -41,6 +41,16 @@
   "dynamodb": {
     "table_name": "CourierLocation"
   },
+  "analytics": {
+    "enabled": true,
+    "stream_name": "dijkfood-demo-order-events",
+    "firehose_name": "dijkfood-demo-order-events-firehose",
+    "s3_bucket": "",
+    "s3_prefix": "order-events",
+    "glue_database": "dijkfood_demo_analytics",
+    "glue_table": "order_events",
+    "firehose_role_arn": ""
+  },
   "iam": {
     "ecs_execution_role_arn": "",
     "ecs_task_role_arn": ""
