@@ -114,7 +114,10 @@ def get_metrics_analytics():
 @app.get("/dashboard")
 def get_dashboard():
     base_dir = Path(__file__).resolve().parent
-    return FileResponse(base_dir / "static" / "index.html")
+    dashboard_path = base_dir / "static" / "intex.html"
+    if not dashboard_path.exists():
+        dashboard_path = base_dir / "static" / "index.html"
+    return FileResponse(dashboard_path)
  
   
 @app.websocket("/ws")

@@ -105,6 +105,7 @@ class MetricsState:
             waiting_courier = 0
             delivering = 0
             delivered = 0
+            cancelled = 0
 
             for order_id, status in self._order_status.items():
                 if status == "PREPARING":
@@ -116,8 +117,12 @@ class MetricsState:
                     delivering += 1
                 elif status == "DELIVERED":
                     delivered += 1
+                elif status == "CANCELLED":
+                    cancelled += 1
 
             couriers_available = sum(1 for is_available in self._courier_available.values() if is_available)
+            active_couriers = sum(1 for is_available in self._courier_available.values() if not is_available)
+            active_orders = preparing + waiting_courier + delivering
             latency_values = [sample[1] for sample in self._latency_samples]
             avg_latency_ms = (sum(latency_values) / len(latency_values)) if latency_values else 0.0
 
@@ -127,12 +132,18 @@ class MetricsState:
                 "orders_delivering": delivering,
                 "orders_delivered": delivered,
                 "orders_completed": delivered,
+                "orders_cancelled": cancelled,
                 "orders_created_per_minute": len(self._created_timestamps),
                 "total_orders_processed": len(self._seen_orders),
                 "couriers_available": couriers_available,
                 "orders_processed_per_minute": len(self._processed_timestamps),
                 "event_to_consumer_latency_ms_avg_1m": round(avg_latency_ms, 2),
                 "event_to_consumer_latency_ms_last": round(self._last_event_latency_ms or 0.0, 2),
+                "orders_total": len(self._seen_orders),
+                "active_orders": active_orders,
+                "active_couriers": active_couriers,
+                "avg_delivery_time_ms": 0.0,
+                "total_revenue": 0.0,
                 "meta": {
                     "last_event_at": self._last_event_at,
                     "last_event_produced_at_ms": int(self._last_event_at * 1000) if self._last_event_at else None,
