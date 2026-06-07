@@ -27,6 +27,8 @@ class EndpointMetrics:
     def p95_latency(self) -> float:
         if not self.latencies:
             return 0.0
+        if len(self.latencies) == 1:
+            return self.latencies[0]
         return statistics.quantiles(self.latencies, n=100)[94]
 
     def max_latency(self) -> float:

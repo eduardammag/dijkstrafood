@@ -98,6 +98,10 @@ def _parse_flat_order_event(payload: dict[str, Any]) -> ParsedEvent | None:
     if {"event_type", "from_status", "to_status"}.intersection(payload.keys()):
         event_type = str(payload.get("event_type", "ORDER_EVENT")).upper()
         status = payload.get("to_status") or payload.get("status") or payload.get("order_status")
+        normalized_event_type = event_type
+        if event_type == "STATUS_CHANGE" and payload.get("from_status") is None and str(status).upper() == "PENDING":
+            normalized_event_type = "ORDER_CREATED"
+
         courier_id = _to_int(payload.get("courier_id"))
         if courier_id is None:
             message = str(payload.get("event_message", ""))
@@ -106,7 +110,7 @@ def _parse_flat_order_event(payload: dict[str, Any]) -> ParsedEvent | None:
                 courier_id = _to_int(match.group(1))
 
         return ParsedEvent(
-            event_type=event_type,
+            event_type=normalized_event_type,
             order_id=_to_int(payload.get("order_id")),
             status=str(status).upper() if status else None,
             courier_id=courier_id,

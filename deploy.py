@@ -935,6 +935,7 @@ class Deployer:
             api_env.update(
                 {
                     "ANALYTICS_ENABLED": "true",
+                    "KINESIS_ENABLED": "false",
                     "KINESIS_STREAM_NAME": analytics_state["kinesis_stream_name"],
                 }
             )
@@ -963,7 +964,11 @@ class Deployer:
 
         realtime_env = {
             "AWS_REGION": self.region,
-            "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
+            "KINESIS_STREAM_NAME": (
+                analytics_state["kinesis_stream_name"]
+                if analytics_state.get("enabled")
+                else self.state["kinesis_stream"]["name"]
+            ),
             "KINESIS_ITERATOR_TYPE": self.config.get("kinesis", {}).get("iterator_type", "LATEST"),
             "KINESIS_POLL_INTERVAL_SECONDS": str(self.config.get("kinesis", {}).get("poll_interval_seconds", 1)),
             "KINESIS_RECORDS_LIMIT": str(self.config.get("kinesis", {}).get("records_limit", 500)),
