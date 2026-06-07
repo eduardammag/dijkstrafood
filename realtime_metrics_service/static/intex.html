@@ -5,238 +5,117 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>DijkFood — Metrics</title>
 <style>
-  /* ── Reset & base ──────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg:       #0d0f14;
-    --surface:  #161922;
-    --surface2: #1e2230;
-    --border:   #2a2f40;
-    --text:     #e8eaf0;
-    --muted:    #7a8099;
-    --accent:   #4f8ef7;
-    --green:    #34c97a;
-    --red:      #e05454;
-    --amber:    #f5a623;
-    --purple:   #9b6dff;
-    --teal:     #26c6da;
-    --radius:   10px;
-    --font: 'Inter', system-ui, sans-serif;
+    --bg:      #0d0f14;
+    --surface: #161922;
+    --surf2:   #1e2230;
+    --border:  #2a2f40;
+    --text:    #e8eaf0;
+    --muted:   #7a8099;
+    --accent:  #4f8ef7;
+    --green:   #34c97a;
+    --red:     #e05454;
+    --amber:   #f5a623;
+    --purple:  #9b6dff;
+    --teal:    #26c6da;
+    --r:       10px;
   }
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 14px;
-    line-height: 1.5;
-    min-height: 100vh;
-  }
+  body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:14px; min-height:100vh; }
 
-  /* ── Header ────────────────────────────────────────────────── */
+  /* ── header ── */
   header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 14px 28px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    display:flex; align-items:center; gap:16px;
+    padding:12px 24px;
+    background:var(--surface); border-bottom:1px solid var(--border);
+    position:sticky; top:0; z-index:100;
   }
+  .logo { font-size:17px; font-weight:700; letter-spacing:-.4px; }
+  .logo span { color:var(--accent); }
 
-  .logo {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.4px;
-    color: var(--text);
-  }
-  .logo span { color: var(--accent); }
-
-  .tab-bar {
-    display: flex;
-    gap: 4px;
-    background: var(--surface2);
-    padding: 4px;
-    border-radius: var(--radius);
-    margin-left: auto;
-  }
-
+  .tab-bar { display:flex; gap:4px; background:var(--surf2); padding:4px; border-radius:var(--r); margin-left:auto; }
   .tab {
-    padding: 7px 20px;
-    border-radius: 7px;
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    padding:6px 18px; border-radius:7px; border:none;
+    background:transparent; color:var(--muted);
+    font-size:13px; font-weight:500; cursor:pointer;
+    transition:background .15s,color .15s;
   }
-  .tab.active {
-    background: var(--accent);
-    color: #fff;
+  .tab.active { background:var(--accent); color:#fff; }
+
+  .dot {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--muted); transition:background .3s; flex-shrink:0;
   }
+  .dot.live  { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .dot.error { background:var(--red); }
 
-  .status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--muted);
-    transition: background 0.3s;
-    flex-shrink: 0;
-  }
-  .status-dot.live  { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .status-dot.error { background: var(--red); }
+  /* ── pages ── */
+  .page { display:none; padding:22px 24px; }
+  .page.active { display:block; }
 
-  /* ── Page ──────────────────────────────────────────────────── */
-  .page { display: none; padding: 24px 28px; }
-  .page.active { display: block; }
-
-  /* ── Section title ─────────────────────────────────────────── */
-  .section-title {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 12px;
+  .section-label {
+    font-size:10px; font-weight:700; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--muted); margin-bottom:10px;
   }
 
-  /* ── KPI grid ──────────────────────────────────────────────── */
+  /* ── KPI grid ── */
   .kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 28px;
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(155px,1fr));
+    gap:10px; margin-bottom:22px;
   }
+  .kpi {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--r); padding:14px 14px 12px;
+    position:relative; overflow:hidden;
+  }
+  .kpi::before {
+    content:''; position:absolute; left:0; top:0; bottom:0;
+    width:3px; background:var(--c,var(--accent));
+    border-radius:2px 0 0 2px;
+  }
+  .kpi-lbl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px; }
+  .kpi-val { font-size:24px; font-weight:700; letter-spacing:-.5px; line-height:1; }
+  .kpi-sub { font-size:10px; color:var(--muted); margin-top:3px; }
 
-  .kpi-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    position: relative;
-    overflow: hidden;
-  }
-  .kpi-card::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 3px;
-    background: var(--accent-color, var(--accent));
-    border-radius: 2px 0 0 2px;
-  }
-
-  .kpi-label {
-    font-size: 11px;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 6px;
-  }
-  .kpi-value {
-    font-size: 26px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    line-height: 1;
-    color: var(--text);
-  }
-  .kpi-sub {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 4px;
-  }
-
-  /* ── Chart grid ────────────────────────────────────────────── */
+  /* ── chart grid ── */
   .chart-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 16px;
-    margin-bottom: 28px;
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+    gap:14px; margin-bottom:22px;
   }
-
   .chart-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 20px 14px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--r); padding:14px 18px 12px;
   }
-  .chart-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 10px;
-  }
-  .chart-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .chart-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text);
-  }
-  canvas.spark {
-    width: 100%;
-    height: 72px;
-    display: block;
+  .chart-hdr { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+  .chart-ttl { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  .chart-cur { font-size:17px; font-weight:700; }
+  canvas.spark { width:100%; height:68px; display:block; }
+
+  /* ── raw meta box ── */
+  .raw-box {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--r); padding:14px 18px;
+    font-family:monospace; font-size:11.5px; color:var(--muted);
+    white-space:pre-wrap; max-height:220px; overflow-y:auto;
+    margin-bottom:22px;
   }
 
-  /* ── Lifetime table ────────────────────────────────────────── */
-  .lifetime-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 12px;
-    margin-bottom: 28px;
+  /* ── funnel ── */
+  .funnel {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--r); padding:18px 20px; margin-bottom:22px;
   }
-  .lt-card {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .lt-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-  .lt-value { font-size: 20px; font-weight: 700; }
+  .f-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .f-lbl { width:140px; font-size:11px; color:var(--muted); flex-shrink:0; }
+  .f-track { flex:1; background:var(--surf2); border-radius:4px; height:20px; overflow:hidden; }
+  .f-bar { height:100%; border-radius:4px; transition:width .5s ease; min-width:3px; }
+  .f-num { width:55px; text-align:right; font-size:12px; font-weight:600; }
 
-  /* ── Funnel ────────────────────────────────────────────────── */
-  .funnel-wrap {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 28px;
-  }
-  .funnel-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
-  }
-  .funnel-label { width: 130px; font-size: 12px; color: var(--muted); flex-shrink: 0; }
-  .funnel-bar-wrap { flex: 1; background: var(--surface2); border-radius: 4px; height: 22px; overflow: hidden; }
-  .funnel-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; min-width: 4px; }
-  .funnel-num { width: 60px; text-align: right; font-size: 13px; font-weight: 600; }
-
-  /* ── Footer ────────────────────────────────────────────────── */
-  footer {
-    text-align: center;
-    padding: 16px;
-    color: var(--muted);
-    font-size: 11px;
-    border-top: 1px solid var(--border);
-  }
-
-  /* ── Pulse animation for live indicators ───────────────────── */
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-  .pulsing { animation: pulse 1.5s infinite; }
+  footer { text-align:center; padding:14px; color:var(--muted); font-size:11px; border-top:1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -244,224 +123,228 @@
 <header>
   <div class="logo">Dijk<span>Food</span></div>
 
-  <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
-    <div class="status-dot" id="dot-rt"></div>
-    <span id="lbl-rt">Realtime</span>
+  <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)">
+    <div class="dot" id="dot-rt"></div><span>Realtime</span>
   </div>
-  <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">
-    <div class="status-dot" id="dot-an"></div>
-    <span id="lbl-an">Analytics</span>
+  <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)">
+    <div class="dot" id="dot-an"></div><span>Analítico</span>
   </div>
 
-  <div class="tab-bar" style="margin-left:auto">
-    <button class="tab active" onclick="switchTab('realtime')">⚡ Tempo Real</button>
-    <button class="tab"        onclick="switchTab('analytics')">📊 Analítico</button>
+  <div class="tab-bar">
+    <button class="tab active" id="tab-rt" onclick="switchTab('rt')">⚡ Tempo Real</button>
+    <button class="tab"        id="tab-an" onclick="switchTab('an')">📊 Analítico</button>
   </div>
 </header>
 
-<!-- ══════════════════════════════════════════════════════════════
-     REALTIME PAGE
-════════════════════════════════════════════════════════════════ -->
-<div class="page active" id="page-realtime">
 
-  <div class="section-title" style="margin-top:4px">Snapshot atual · atualiza a cada segundo</div>
+<!-- ════════════════════════════════════════════
+     REALTIME
+════════════════════════════════════════════ -->
+<div class="page active" id="page-rt">
+
+  <div class="section-label" style="margin-top:2px">Snapshot ao vivo · atualiza a cada segundo</div>
 
   <div class="kpi-grid">
-    <div class="kpi-card" style="--accent-color:var(--accent)">
-      <div class="kpi-label">Pedidos Ativos</div>
-      <div class="kpi-value" id="rt-active-orders">—</div>
-      <div class="kpi-sub">em andamento agora</div>
+    <div class="kpi" style="--c:var(--amber)">
+      <div class="kpi-lbl">Em Preparo</div>
+      <div class="kpi-val" id="rt-preparing">—</div>
+      <div class="kpi-sub">PREPARING</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--green)">
-      <div class="kpi-label">Entregues (total)</div>
-      <div class="kpi-value" id="rt-delivered">—</div>
+    <div class="kpi" style="--c:var(--purple)">
+      <div class="kpi-lbl">Aguardando Courier</div>
+      <div class="kpi-val" id="rt-waiting">—</div>
+      <div class="kpi-sub">READY_FOR_PICKUP sem courier</div>
+    </div>
+    <div class="kpi" style="--c:var(--accent)">
+      <div class="kpi-lbl">Em Entrega</div>
+      <div class="kpi-val" id="rt-delivering">—</div>
+      <div class="kpi-sub">PICKED_UP / IN_TRANSIT</div>
+    </div>
+    <div class="kpi" style="--c:var(--green)">
+      <div class="kpi-lbl">Entregues (total)</div>
+      <div class="kpi-val" id="rt-delivered">—</div>
+      <div class="kpi-sub">DELIVERED</div>
+    </div>
+    <div class="kpi" style="--c:var(--teal)">
+      <div class="kpi-lbl">Criados / min</div>
+      <div class="kpi-val" id="rt-created-pm">—</div>
+      <div class="kpi-sub">janela 60 s</div>
+    </div>
+    <div class="kpi" style="--c:var(--accent)">
+      <div class="kpi-lbl">Total Processados</div>
+      <div class="kpi-val" id="rt-total">—</div>
       <div class="kpi-sub">desde o início</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--amber)">
-      <div class="kpi-label">Cancelados (total)</div>
-      <div class="kpi-value" id="rt-cancelled">—</div>
-      <div class="kpi-sub">desde o início</div>
+    <div class="kpi" style="--c:var(--green)">
+      <div class="kpi-lbl">Couriers Disponíveis</div>
+      <div class="kpi-val" id="rt-couriers">—</div>
+      <div class="kpi-sub">livres agora</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--purple)">
-      <div class="kpi-label">Couriers Ativos</div>
-      <div class="kpi-value" id="rt-couriers">—</div>
-      <div class="kpi-sub">em rota agora</div>
+    <div class="kpi" style="--c:var(--red)">
+      <div class="kpi-lbl">Latência Média 1m</div>
+      <div class="kpi-val" id="rt-lat-avg">—</div>
+      <div class="kpi-sub">evento → consumer</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--teal)">
-      <div class="kpi-label">Tempo Médio Entrega</div>
-      <div class="kpi-value" id="rt-avg-del">—</div>
-      <div class="kpi-sub">segundos</div>
-    </div>
-    <div class="kpi-card" style="--accent-color:var(--green)">
-      <div class="kpi-label">Receita Total</div>
-      <div class="kpi-value" id="rt-revenue">—</div>
-      <div class="kpi-sub">R$ acumulado</div>
+    <div class="kpi" style="--c:var(--amber)">
+      <div class="kpi-lbl">Latência Evento→Dashboard</div>
+      <div class="kpi-val" id="rt-lat-dash">—</div>
+      <div class="kpi-sub">agora</div>
     </div>
   </div>
 
-  <div class="section-title">Métricas em tempo real (últimos dados recebidos)</div>
-  <div id="rt-raw" style="
-    background:var(--surface);
-    border:1px solid var(--border);
-    border-radius:var(--radius);
-    padding:16px 20px;
-    font-family:monospace;
-    font-size:12px;
-    color:var(--muted);
-    white-space:pre-wrap;
-    max-height:260px;
-    overflow-y:auto;
-    margin-bottom:28px;
-  ">Aguardando dados…</div>
+  <div class="section-label">Metadados de ingestão</div>
+  <div class="raw-box" id="rt-meta">Aguardando dados…</div>
 
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════
-     ANALYTICS PAGE
-════════════════════════════════════════════════════════════════ -->
-<div class="page" id="page-analytics">
 
-  <div class="section-title" style="margin-top:4px">KPIs · janela deslizante 60 s / 5 min</div>
+<!-- ════════════════════════════════════════════
+     ANALYTICS
+════════════════════════════════════════════ -->
+<div class="page" id="page-an">
+
+  <div class="section-label" style="margin-top:2px">Histórico em memória · atualiza a cada segundo · KPIs = últimos 60 s · gráficos e funil = últimos 5 min</div>
 
   <div class="kpi-grid">
-    <div class="kpi-card" style="--accent-color:var(--accent)">
-      <div class="kpi-label">Pedidos / 60 s</div>
-      <div class="kpi-value" id="an-orders-60">—</div>
+    <div class="kpi" style="--c:var(--accent)">
+      <div class="kpi-lbl">Novos pedidos / 60 s</div>
+      <div class="kpi-val" id="an-new60">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--green)">
-      <div class="kpi-label">Receita / 60 s</div>
-      <div class="kpi-value" id="an-rev-60">—</div>
-      <div class="kpi-sub">R$</div>
+    <div class="kpi" style="--c:var(--green)">
+      <div class="kpi-lbl">Entregas / 60 s</div>
+      <div class="kpi-val" id="an-del60">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--teal)">
-      <div class="kpi-label">Receita / 5 min</div>
-      <div class="kpi-value" id="an-rev-5m">—</div>
-      <div class="kpi-sub">R$</div>
+    <div class="kpi" style="--c:var(--teal)">
+      <div class="kpi-lbl">Novos pedidos/s</div>
+      <div class="kpi-val" id="an-thr">—</div>
+      <div class="kpi-sub">média últimos 60 s</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--green)">
-      <div class="kpi-label">Taxa Entrega</div>
-      <div class="kpi-value" id="an-del-rate">—</div>
-      <div class="kpi-sub">% dos pedidos / 60 s</div>
+    <div class="kpi" style="--c:var(--amber)">
+      <div class="kpi-lbl">Em Preparo</div>
+      <div class="kpi-val" id="an-prep">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--red)">
-      <div class="kpi-label">Taxa Cancelamento</div>
-      <div class="kpi-value" id="an-can-rate">—</div>
-      <div class="kpi-sub">% dos pedidos / 60 s</div>
+    <div class="kpi" style="--c:var(--purple)">
+      <div class="kpi-lbl">Aguardando Courier</div>
+      <div class="kpi-val" id="an-wait">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--amber)">
-      <div class="kpi-label">Tempo Médio Entrega</div>
-      <div class="kpi-value" id="an-avg-del">—</div>
-      <div class="kpi-sub">segundos</div>
+    <div class="kpi" style="--c:var(--accent)">
+      <div class="kpi-lbl">Em Entrega</div>
+      <div class="kpi-val" id="an-del">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--purple)">
-      <div class="kpi-label">Couriers Ativos</div>
-      <div class="kpi-value" id="an-couriers">—</div>
+    <div class="kpi" style="--c:var(--green)">
+      <div class="kpi-lbl">Couriers Disponíveis</div>
+      <div class="kpi-val" id="an-cou">—</div>
     </div>
-    <div class="kpi-card" style="--accent-color:var(--accent)">
-      <div class="kpi-label">Pedidos Ativos</div>
-      <div class="kpi-value" id="an-active-orders">—</div>
+    <div class="kpi" style="--c:var(--red)">
+      <div class="kpi-lbl">Latência Média 1m</div>
+      <div class="kpi-val" id="an-lat-avg">—</div>
+      <div class="kpi-sub">ms</div>
+    </div>
+    <div class="kpi" style="--c:var(--amber)">
+      <div class="kpi-lbl">Latência Último Evento</div>
+      <div class="kpi-val" id="an-lat-last">—</div>
+      <div class="kpi-sub">ms</div>
+    </div>
+    <div class="kpi" style="--c:var(--accent)">
+      <div class="kpi-lbl">Criados / min (agora)</div>
+      <div class="kpi-val" id="an-cpm">—</div>
+    </div>
+    <div class="kpi" style="--c:var(--teal)">
+      <div class="kpi-lbl">Total Processados</div>
+      <div class="kpi-val" id="an-tot">—</div>
     </div>
   </div>
 
-  <!-- Charts -->
-  <div class="section-title">Séries temporais · último minuto</div>
+  <!-- Funil de status -->
+  <div class="section-label">Pipeline de pedidos · snapshot atual</div>
+  <div class="funnel">
+    <div class="f-row">
+      <div class="f-lbl">Total Processados</div>
+      <div class="f-track"><div class="f-bar" id="fb-total"   style="background:var(--accent);width:100%"></div></div>
+      <div class="f-num" id="fn-total">—</div>
+    </div>
+    <div class="f-row">
+      <div class="f-lbl">Em Preparo</div>
+      <div class="f-track"><div class="f-bar" id="fb-prep"    style="background:var(--amber);width:0%"></div></div>
+      <div class="f-num" id="fn-prep">—</div>
+    </div>
+    <div class="f-row">
+      <div class="f-lbl">Aguardando Courier</div>
+      <div class="f-track"><div class="f-bar" id="fb-wait"    style="background:var(--purple);width:0%"></div></div>
+      <div class="f-num" id="fn-wait">—</div>
+    </div>
+    <div class="f-row">
+      <div class="f-lbl">Em Entrega</div>
+      <div class="f-track"><div class="f-bar" id="fb-del"     style="background:var(--accent);width:0%"></div></div>
+      <div class="f-num" id="fn-del">—</div>
+    </div>
+    <div class="f-row">
+      <div class="f-lbl">Entregues</div>
+      <div class="f-track"><div class="f-bar" id="fb-done"    style="background:var(--green);width:0%"></div></div>
+      <div class="f-num" id="fn-done">—</div>
+    </div>
+  </div>
+
+  <!-- Séries temporais -->
+  <div class="section-label">Séries temporais · último minuto</div>
   <div class="chart-grid">
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Throughput (pedidos/s)</span>
-        <span class="chart-value" id="an-thr-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Novos pedidos/s</span>
+        <span class="chart-cur" id="cv-thr">—</span>
       </div>
-      <canvas class="spark" id="chart-throughput"></canvas>
+      <canvas class="spark" id="ch-thr"></canvas>
     </div>
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Entregas / s</span>
-        <span class="chart-value" id="an-del-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Criados por minuto</span>
+        <span class="chart-cur" id="cv-cpm">—</span>
       </div>
-      <canvas class="spark" id="chart-deliveries"></canvas>
+      <canvas class="spark" id="ch-cpm"></canvas>
     </div>
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Couriers ativos</span>
-        <span class="chart-value" id="an-cou-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Em Preparo</span>
+        <span class="chart-cur" id="cv-prep">—</span>
       </div>
-      <canvas class="spark" id="chart-couriers"></canvas>
+      <canvas class="spark" id="ch-prep"></canvas>
     </div>
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Pedidos ativos</span>
-        <span class="chart-value" id="an-ao-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Em Entrega</span>
+        <span class="chart-cur" id="cv-del">—</span>
       </div>
-      <canvas class="spark" id="chart-active-orders"></canvas>
+      <canvas class="spark" id="ch-del"></canvas>
     </div>
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Tempo de entrega (s)</span>
-        <span class="chart-value" id="an-dt-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Couriers Disponíveis</span>
+        <span class="chart-cur" id="cv-cou">—</span>
       </div>
-      <canvas class="spark" id="chart-delivery-time"></canvas>
+      <canvas class="spark" id="ch-cou"></canvas>
     </div>
 
     <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">Receita acumulada (5 min)</span>
-        <span class="chart-value" id="an-rc-val">—</span>
+      <div class="chart-hdr">
+        <span class="chart-ttl">Latência Evento→Consumer (ms)</span>
+        <span class="chart-cur" id="cv-lat">—</span>
       </div>
-      <canvas class="spark" id="chart-revenue"></canvas>
+      <canvas class="spark" id="ch-lat"></canvas>
     </div>
 
-  </div>
+    <div class="chart-card">
+      <div class="chart-hdr">
+        <span class="chart-ttl">Entregas acumuladas (5 min)</span>
+        <span class="chart-cur" id="cv-dcum">—</span>
+      </div>
+      <canvas class="spark" id="ch-dcum"></canvas>
+    </div>
 
-  <!-- Funnel -->
-  <div class="section-title">Funil de pedidos · lifetime</div>
-  <div class="funnel-wrap">
-    <div class="funnel-row">
-      <div class="funnel-label">Criados</div>
-      <div class="funnel-bar-wrap">
-        <div class="funnel-bar" id="fn-placed" style="background:var(--accent);width:100%"></div>
-      </div>
-      <div class="funnel-num" id="fn-placed-n">—</div>
-    </div>
-    <div class="funnel-row">
-      <div class="funnel-label">Entregues</div>
-      <div class="funnel-bar-wrap">
-        <div class="funnel-bar" id="fn-delivered" style="background:var(--green);width:0%"></div>
-      </div>
-      <div class="funnel-num" id="fn-delivered-n">—</div>
-    </div>
-    <div class="funnel-row">
-      <div class="funnel-label">Cancelados</div>
-      <div class="funnel-bar-wrap">
-        <div class="funnel-bar" id="fn-cancelled" style="background:var(--red);width:0%"></div>
-      </div>
-      <div class="funnel-num" id="fn-cancelled-n">—</div>
-    </div>
-  </div>
-
-  <!-- Lifetime totals -->
-  <div class="section-title">Totais acumulados desde o início</div>
-  <div class="lifetime-grid">
-    <div class="lt-card">
-      <div class="lt-label">Pedidos criados</div>
-      <div class="lt-value" id="lt-placed">—</div>
-    </div>
-    <div class="lt-card">
-      <div class="lt-label">Entregues</div>
-      <div class="lt-value" style="color:var(--green)" id="lt-delivered">—</div>
-    </div>
-    <div class="lt-card">
-      <div class="lt-label">Cancelados</div>
-      <div class="lt-value" style="color:var(--red)" id="lt-cancelled">—</div>
-    </div>
-    <div class="lt-card">
-      <div class="lt-label">Receita total</div>
-      <div class="lt-value" style="color:var(--amber)" id="lt-revenue">—</div>
-    </div>
   </div>
 
 </div>
@@ -469,193 +352,135 @@
 <footer>DijkFood Metrics &nbsp;·&nbsp; <span id="footer-ts">—</span></footer>
 
 <script>
-/* ================================================================
-   Utilities
-================================================================ */
-const $ = id => document.getElementById(id);
-const fmt = (n, dec=0) => (n == null ? '—' : Number(n).toLocaleString('pt-BR',{minimumFractionDigits:dec,maximumFractionDigits:dec}));
-const fmtR = n => n == null ? '—' : 'R$ ' + fmt(n, 2);
-const fmtS = n => n == null ? '—' : fmt(n, 1) + ' s';
+/* ── helpers ── */
+const $  = id => document.getElementById(id);
+const N  = (v, d=0) => v == null ? '—' : Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+const MS = v => v == null ? '—' : Math.round(v) + ' ms';
 
-/* ================================================================
-   Tab switching
-================================================================ */
+/* ── tab switching ── */
 function switchTab(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  $('page-' + name).classList.add('active');
-  document.querySelectorAll('.tab').forEach(t => {
-    if (t.textContent.toLowerCase().includes(name === 'realtime' ? 'real' : 'analít'))
-      t.classList.add('active');
+  ['rt','an'].forEach(t => {
+    $('page-'+t).classList.toggle('active', t===name);
+    $('tab-'+t).classList.toggle('active',  t===name);
   });
 }
 
-/* ================================================================
-   WebSocket factory with auto-reconnect
-================================================================ */
-function makeWS(path, onMessage, dotId, lblId) {
-  const dot = $(dotId), lbl = $(lblId);
-  let ws, retryMs = 1000;
-
+/* ── WebSocket with auto-reconnect ── */
+function makeWS(path, onMsg, dotId) {
+  const dot = $(dotId);
+  let retryMs = 1000;
   function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}${path}`);
-
-    ws.onopen = () => {
-      dot.className = 'status-dot live';
-      retryMs = 1000;
-    };
-    ws.onmessage = e => {
-      try { onMessage(JSON.parse(e.data)); } catch(_) {}
-    };
+    const proto = location.protocol==='https:'?'wss':'ws';
+    const ws = new WebSocket(`${proto}://${location.host}${path}`);
+    ws.onopen    = () => { dot.className='dot live'; retryMs=1000; };
+    ws.onmessage = e => { try { onMsg(JSON.parse(e.data)); } catch(_){} };
     ws.onclose = ws.onerror = () => {
-      dot.className = 'status-dot error';
-      setTimeout(connect, Math.min(retryMs *= 1.5, 15000));
+      dot.className='dot error';
+      setTimeout(connect, Math.min(retryMs*=1.5, 15000));
     };
+    setInterval(()=>{ if(ws.readyState===1) ws.send('ping'); }, 10000);
   }
   connect();
 }
 
-/* ================================================================
-   Realtime dashboard
-================================================================ */
+/* ── sparkline renderer ── */
+function drawSpark(id, series, color) {
+  const c = $(id);
+  if (!c || !series || series.length < 2) return;
+  const dpr=devicePixelRatio||1, W=c.offsetWidth||300, H=c.offsetHeight||68;
+  c.width=W*dpr; c.height=H*dpr;
+  const ctx=c.getContext('2d'); ctx.scale(dpr,dpr);
+  const vals=series.map(p=>p.v);
+  const mn=Math.min(...vals), mx=Math.max(...vals), rng=mx-mn||1;
+  const toY=v=>H-5-((v-mn)/rng)*(H-10);
+  const toX=(i,l)=>(i/(l-1))*W;
+  // fill
+  ctx.beginPath();
+  series.forEach((p,i)=>{ const x=toX(i,series.length),y=toY(p.v); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,color+'44'); g.addColorStop(1,color+'00');
+  ctx.fillStyle=g; ctx.fill();
+  // line
+  ctx.beginPath();
+  series.forEach((p,i)=>{ const x=toX(i,series.length),y=toY(p.v); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.strokeStyle=color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
+  // dot
+  const lp=series[series.length-1];
+  ctx.beginPath(); ctx.arc(toX(series.length-1,series.length),toY(lp.v),3.5,0,Math.PI*2);
+  ctx.fillStyle=color; ctx.fill();
+}
+
+/* ════════════════════════════════════════
+   REALTIME WebSocket  →  /ws
+════════════════════════════════════════ */
 makeWS('/ws', snap => {
-  $('rt-active-orders').textContent = fmt(snap.active_orders);
-  $('rt-delivered').textContent     = fmt(snap.orders_delivered);
-  $('rt-cancelled').textContent     = fmt(snap.orders_cancelled);
-  $('rt-couriers').textContent      = fmt(snap.active_couriers);
-  $('rt-avg-del').textContent       = fmtS(snap.avg_delivery_time_ms != null ? snap.avg_delivery_time_ms / 1000 : null);
-  $('rt-revenue').textContent       = fmtR(snap.total_revenue);
-  $('rt-raw').textContent           = JSON.stringify(snap, null, 2);
-  $('footer-ts').textContent        = new Date().toLocaleTimeString('pt-BR');
-}, 'dot-rt', 'lbl-rt');
+  $('rt-preparing').textContent  = N(snap.orders_preparing);
+  $('rt-waiting').textContent    = N(snap.orders_waiting_courier);
+  $('rt-delivering').textContent = N(snap.orders_delivering);
+  $('rt-delivered').textContent  = N(snap.orders_delivered ?? snap.orders_completed);
+  $('rt-created-pm').textContent = N(snap.orders_created_per_minute);
+  $('rt-total').textContent      = N(snap.total_orders_processed);
+  $('rt-couriers').textContent   = N(snap.couriers_available);
+  $('rt-lat-avg').textContent    = MS(snap.event_to_consumer_latency_ms_avg_1m);
 
-/* ================================================================
-   Sparkline renderer
-================================================================ */
-const CHART_COLOR = {
-  throughput:    '#4f8ef7',
-  deliveries:    '#34c97a',
-  couriers:      '#9b6dff',
-  'active-orders': '#26c6da',
-  'delivery-time': '#f5a623',
-  revenue:       '#e05454',
-};
+  const producedAt = snap?.meta?.last_event_produced_at_ms;
+  $('rt-lat-dash').textContent = producedAt ? MS(Date.now() - producedAt) : '— ms';
 
-function drawSpark(canvasId, series, color) {
-  const canvas = $(canvasId);
-  if (!canvas || !series || series.length < 2) return;
+  $('rt-meta').textContent = JSON.stringify(snap.meta || {}, null, 2);
+  $('footer-ts').textContent = new Date().toLocaleTimeString('pt-BR');
+}, 'dot-rt');
 
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth  || 320;
-  const H = canvas.offsetHeight || 72;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const vals = series.map(p => p.v);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const range = max - min || 1;
-
-  const toY = v => H - 6 - ((v - min) / range) * (H - 12);
-  const toX = (i, len) => (i / (len - 1)) * W;
-
-  // Fill
-  ctx.beginPath();
-  series.forEach((p, i) => {
-    const x = toX(i, series.length), y = toY(p.v);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  });
-  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, color + '44');
-  grad.addColorStop(1, color + '00');
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // Line
-  ctx.beginPath();
-  series.forEach((p, i) => {
-    const x = toX(i, series.length), y = toY(p.v);
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  });
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.stroke();
-
-  // Last dot
-  const last = series[series.length - 1];
-  const lx = toX(series.length - 1, series.length);
-  const ly = toY(last.v);
-  ctx.beginPath();
-  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-}
-
-/* ================================================================
-   Analytics dashboard
-================================================================ */
-function updateFunnel(placed, delivered, cancelled) {
-  const base = Math.max(placed, 1);
-  $('fn-placed-n').textContent    = fmt(placed);
-  $('fn-delivered-n').textContent = fmt(delivered);
-  $('fn-cancelled-n').textContent = fmt(cancelled);
-  $('fn-placed').style.width    = '100%';
-  $('fn-delivered').style.width = (delivered / base * 100).toFixed(1) + '%';
-  $('fn-cancelled').style.width = (cancelled / base * 100).toFixed(1) + '%';
-}
-
+/* ════════════════════════════════════════
+   ANALYTICS WebSocket  →  /ws/analytics
+════════════════════════════════════════ */
 makeWS('/ws/analytics', snap => {
-  const k = snap.kpis || {};
-  const lt = snap.lifetime || {};
-  const s  = snap.series  || {};
+  const k = snap.kpis   || {};
+  const s = snap.series || {};
 
-  // KPIs
-  $('an-orders-60').textContent   = fmt(k.orders_last_60s);
-  $('an-rev-60').textContent      = fmtR(k.revenue_last_60s);
-  $('an-rev-5m').textContent      = fmtR(k.revenue_last_5m);
-  $('an-del-rate').textContent    = fmt(k.delivery_rate_pct, 1) + '%';
-  $('an-can-rate').textContent    = fmt(k.cancel_rate_pct,   1) + '%';
-  $('an-avg-del').textContent     = fmtS(k.avg_delivery_time_s);
-  $('an-couriers').textContent    = fmt(k.active_couriers);
-  $('an-active-orders').textContent = fmt(k.active_orders);
+  /* KPIs */
+  $('an-new60').textContent    = N(k.new_orders_last_60s);
+  $('an-del60').textContent    = N(k.new_delivered_last_60s);
+  $('an-thr').textContent      = N(k.throughput_per_s, 2);
+  $('an-prep').textContent     = N(k.orders_preparing);
+  $('an-wait').textContent     = N(k.orders_waiting_courier);
+  $('an-del').textContent      = N(k.orders_delivering);
+  $('an-cou').textContent      = N(k.couriers_available);
+  $('an-lat-avg').textContent  = MS(k.latency_avg_1m_ms);
+  $('an-lat-last').textContent = MS(k.latency_last_ms);
+  $('an-cpm').textContent      = N(k.created_per_min);
+  $('an-tot').textContent      = N(k.total_processed);
 
-  // Lifetime
-  $('lt-placed').textContent    = fmt(lt.orders_placed);
-  $('lt-delivered').textContent = fmt(lt.orders_delivered);
-  $('lt-cancelled').textContent = fmt(lt.orders_cancelled);
-  $('lt-revenue').textContent   = fmtR(lt.revenue);
-
-  // Funnel
-  updateFunnel(lt.orders_placed || 0, lt.orders_delivered || 0, lt.orders_cancelled || 0);
-
-  // Charts
-  const charts = [
-    ['chart-throughput',    s.throughput,    'throughput',    'an-thr-val'],
-    ['chart-deliveries',    s.deliveries,    'deliveries',    'an-del-val'],
-    ['chart-couriers',      s.couriers,      'couriers',      'an-cou-val'],
-    ['chart-active-orders', s.active_orders, 'active-orders', 'an-ao-val'],
-    ['chart-delivery-time', s.delivery_time, 'delivery-time', 'an-dt-val'],
-    ['chart-revenue',       s.revenue_cum,   'revenue',       'an-rc-val'],
+  /* Funil */
+  const tot = Math.max(k.total_processed || 1, 1);
+  const funnelData = [
+    ['fb-total','fn-total', tot,                      '100'],
+    ['fb-prep', 'fn-prep',  k.orders_preparing,       (k.orders_preparing/tot*100).toFixed(1)],
+    ['fb-wait', 'fn-wait',  k.orders_waiting_courier, (k.orders_waiting_courier/tot*100).toFixed(1)],
+    ['fb-del',  'fn-del',   k.orders_delivering,      (k.orders_delivering/tot*100).toFixed(1)],
+    ['fb-done', 'fn-done',  k.orders_delivered_total, (k.orders_delivered_total/tot*100).toFixed(1)],
   ];
-
-  charts.forEach(([id, series, colorKey, valId]) => {
-    drawSpark(id, series, CHART_COLOR[colorKey]);
-    if (series && series.length) {
-      const last = series[series.length - 1].v;
-      $(valId).textContent = colorKey === 'revenue'
-        ? fmtR(last)
-        : colorKey === 'delivery-time'
-          ? fmtS(last)
-          : fmt(last, 1);
-    }
+  funnelData.forEach(([barId, numId, val, pct]) => {
+    $(barId).style.width = pct + '%';
+    $(numId).textContent = N(val);
   });
 
-}, 'dot-an', 'lbl-an');
+  /* Sparklines */
+  const charts = [
+    ['ch-thr',  s.throughput,    '#4f8ef7', 'cv-thr',  v=>N(v,1)],
+    ['ch-cpm',  s.created,       '#26c6da', 'cv-cpm',  v=>N(v)],
+    ['ch-prep', s.preparing,     '#f5a623', 'cv-prep', v=>N(v)],
+    ['ch-del',  s.delivering,    '#4f8ef7', 'cv-del',  v=>N(v)],
+    ['ch-cou',  s.couriers,      '#34c97a', 'cv-cou',  v=>N(v)],
+    ['ch-lat',  s.latency,       '#e05454', 'cv-lat',  v=>MS(v)],
+    ['ch-dcum', s.delivered_cum, '#34c97a', 'cv-dcum', v=>N(v)],
+  ];
+  charts.forEach(([cid, data, color, vid, fmt]) => {
+    drawSpark(cid, data, color);
+    if (data && data.length) $(vid).textContent = fmt(data[data.length-1].v);
+  });
+
+}, 'dot-an');
 </script>
 </body>
 </html>
