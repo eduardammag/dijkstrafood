@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from consumer import KinesisConsumer
 from metrics_state import MetricsState
 from analytics_state import AnalyticsState
+from athena_analytics import AthenaAnalyticsClient
 
 
 class WebSocketHub:
@@ -44,6 +45,7 @@ app = FastAPI(title="Realtime Metrics Service")
 
 state     = MetricsState()
 analytics = AnalyticsState()
+athena_analytics = AthenaAnalyticsClient()
 consumer  = KinesisConsumer(state)
 
 realtime_hub  = WebSocketHub()
@@ -98,8 +100,9 @@ def root():
         "dashboard":          "/dashboard",
         "metrics":            "/metrics",
         "metrics_analytics":  "/metrics/analytics",
+        "metrics_realtime_rollup": "/metrics/realtime-rollup",
         "websocket":          "/ws",
-        "websocket_analytics": "/ws/analytics",
+        "websocket_realtime_rollup": "/ws/realtime-rollup",
     }
 
 
@@ -110,15 +113,20 @@ def get_metrics():
 
 @app.get("/metrics/analytics")
 def get_metrics_analytics():
+    return athena_analytics.snapshot()
+
+
+@app.get("/metrics/realtime-rollup")
+def get_metrics_realtime_rollup():
     return analytics.snapshot()
 
 
 @app.get("/dashboard")
 def get_dashboard():
     base_dir = Path(__file__).resolve().parent
-    dashboard_path = base_dir / "static" / "intex.html"
+    dashboard_path = base_dir / "static" / "index.html"
     if not dashboard_path.exists():
-        dashboard_path = base_dir / "static" / "index.html"
+        dashboard_path = base_dir / "static" / "intex.html"
     return FileResponse(dashboard_path)
  
   
@@ -136,9 +144,9 @@ async def websocket_realtime(websocket: WebSocket):
         await realtime_hub.disconnect(websocket)
 
 
-@app.websocket("/ws/analytics")
+@app.websocket("/ws/realtime-rollup")
 async def websocket_analytics(websocket: WebSocket):
-    """Push analytics snapshot every second."""
+    """Push in-memory realtime rollup snapshot every second."""
     await analytics_hub.connect(websocket)
     await websocket.send_json(analytics.snapshot())
     try:

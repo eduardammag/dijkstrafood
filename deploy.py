@@ -973,6 +973,16 @@ class Deployer:
             "KINESIS_POLL_INTERVAL_SECONDS": str(self.config.get("kinesis", {}).get("poll_interval_seconds", 1)),
             "KINESIS_RECORDS_LIMIT": str(self.config.get("kinesis", {}).get("records_limit", 500)),
         }
+        if analytics_state.get("enabled"):
+            realtime_env.update(
+                {
+                    "ATHENA_ANALYTICS_ENABLED": "true",
+                    "ATHENA_DATABASE": analytics_state["glue_database"],
+                    "ATHENA_TABLE": analytics_state["glue_table"],
+                    "ATHENA_OUTPUT_LOCATION": f"s3://{analytics_state['s3_bucket']}/athena-results/",
+                    "ATHENA_CACHE_TTL_SECONDS": "30",
+                }
+            )
         td_realtime = self.register_task_definition(
             "realtime-metrics-service",
             imgs["realtime_metrics_service"],

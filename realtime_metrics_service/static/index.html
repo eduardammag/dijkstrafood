@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>DijkFood Metrics</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d0f14;--surface:#161922;--surf2:#1e2230;--border:#2a2f40;--text:#e8eaf0;--muted:#7a8099;--accent:#4f8ef7;--green:#34c97a;--red:#e05454;--amber:#f5a623;--purple:#9b6dff;--teal:#26c6da;--r:10px}
+body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;min-height:100vh}
+header{display:flex;align-items:center;gap:16px;padding:12px 24px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.logo{font-size:17px;font-weight:700;letter-spacing:-.4px}.logo span{color:var(--accent)}
+.tab-bar{display:flex;gap:4px;background:var(--surf2);padding:4px;border-radius:var(--r);margin-left:auto}
+.tab{padding:6px 18px;border-radius:7px;border:0;background:transparent;color:var(--muted);font-size:13px;font-weight:500;cursor:pointer}.tab.active{background:var(--accent);color:#fff}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}.dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}.dot.error{background:var(--red)}
+.page{display:none;padding:22px 24px}.page.active{display:block}.section-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:2px 0 10px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:22px}.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 14px 12px;position:relative;overflow:hidden}.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--c,var(--accent));border-radius:2px 0 0 2px}.kpi-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}.kpi-val{font-size:24px;font-weight:700;letter-spacing:-.5px;line-height:1}.kpi-sub{font-size:10px;color:var(--muted);margin-top:3px}
+.chart-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:22px}.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 18px 12px}.chart-hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}.chart-ttl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.chart-cur{font-size:17px;font-weight:700}canvas.spark{width:100%;height:68px;display:block}
+.raw-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 18px;font-family:monospace;font-size:11.5px;color:var(--muted);white-space:pre-wrap;max-height:220px;overflow-y:auto;margin-bottom:22px}
+.list{display:grid;gap:8px}.bar-row{display:grid;grid-template-columns:150px 1fr 60px;gap:10px;align-items:center}.bar-label{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar-track{background:var(--surf2);border-radius:4px;height:20px;overflow:hidden}.bar-fill{height:100%;min-width:3px;background:var(--accent);border-radius:4px;transition:width .4s ease}.bar-num{text-align:right;font-weight:700;font-size:12px}.notice{background:var(--surf2);border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:12px 14px;margin-bottom:16px}
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:16px}.insight{background:linear-gradient(135deg,var(--surface),var(--surf2));border:1px solid var(--border);border-radius:var(--r);padding:14px 16px}.insight-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}.insight-main{font-size:20px;font-weight:800}.insight-sub{font-size:11px;color:var(--muted);margin-top:4px}
+.donut-wrap{display:flex;align-items:center;gap:18px;min-height:150px}.donut{width:132px;height:132px;border-radius:50%;background:var(--surf2);position:relative;flex:0 0 132px}.donut::after{content:"";position:absolute;inset:30px;background:var(--surface);border-radius:50%;border:1px solid var(--border)}.legend{display:grid;gap:8px;min-width:0;flex:1}.legend-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:8px;align-items:center;color:var(--muted);font-size:12px}.swatch{width:10px;height:10px;border-radius:2px}.legend-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.legend-num{font-weight:700;color:var(--text)}
+footer{text-align:center;padding:14px;color:var(--muted);font-size:11px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Dijk<span>Food</span></div>
+  <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)"><div class="dot" id="dot-rt"></div><span>Realtime</span></div>
+  <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)"><div class="dot" id="dot-an"></div><span>Athena</span></div>
+  <div class="tab-bar"><button class="tab active" id="tab-rt" onclick="switchTab('rt')">Tempo Real</button><button class="tab" id="tab-an" onclick="switchTab('an')">Analítico</button></div>
+</header>
+
+<div class="page active" id="page-rt">
+  <div class="section-label">Snapshot e gráficos ao vivo - memória do realtime service</div>
+  <div class="kpi-grid">
+    <div class="kpi" style="--c:var(--amber)"><div class="kpi-lbl">Em Preparo</div><div class="kpi-val" id="rt-preparing">-</div><div class="kpi-sub">PREPARING</div></div>
+    <div class="kpi" style="--c:var(--purple)"><div class="kpi-lbl">Aguardando Courier</div><div class="kpi-val" id="rt-waiting">-</div><div class="kpi-sub">READY_FOR_PICKUP</div></div>
+    <div class="kpi" style="--c:var(--accent)"><div class="kpi-lbl">Em Entrega</div><div class="kpi-val" id="rt-delivering">-</div><div class="kpi-sub">PICKED_UP / IN_TRANSIT</div></div>
+    <div class="kpi" style="--c:var(--green)"><div class="kpi-lbl">Entregues</div><div class="kpi-val" id="rt-delivered">-</div><div class="kpi-sub">desde o início do container</div></div>
+    <div class="kpi" style="--c:var(--teal)"><div class="kpi-lbl">Criados / min</div><div class="kpi-val" id="rt-created-pm">-</div><div class="kpi-sub">janela 60s</div></div>
+    <div class="kpi" style="--c:var(--accent)"><div class="kpi-lbl">Total Processados</div><div class="kpi-val" id="rt-total">-</div><div class="kpi-sub">desde o início do container</div></div>
+    <div class="kpi" style="--c:var(--green)"><div class="kpi-lbl">Couriers Disponíveis</div><div class="kpi-val" id="rt-couriers">-</div><div class="kpi-sub">conhecidos pelo stream</div></div>
+    <div class="kpi" style="--c:var(--red)"><div class="kpi-lbl">Latência Média 1m</div><div class="kpi-val" id="rt-lat-avg">-</div><div class="kpi-sub">evento para consumer</div></div>
+    <div class="kpi" style="--c:var(--amber)"><div class="kpi-lbl">Idade Último Evento</div><div class="kpi-val" id="rt-lat-dash">-</div><div class="kpi-sub">evento para browser</div></div>
+  </div>
+  <div class="section-label">Gráficos ao vivo - últimos segundos/minutos</div>
+  <div class="chart-grid">
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Novos pedidos/s</span><span class="chart-cur" id="cv-thr">-</span></div><canvas class="spark" id="ch-thr"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Criados por minuto</span><span class="chart-cur" id="cv-cpm">-</span></div><canvas class="spark" id="ch-cpm"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Em Preparo</span><span class="chart-cur" id="cv-prep">-</span></div><canvas class="spark" id="ch-prep"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Em Entrega</span><span class="chart-cur" id="cv-del">-</span></div><canvas class="spark" id="ch-del"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Couriers Disponíveis</span><span class="chart-cur" id="cv-cou">-</span></div><canvas class="spark" id="ch-cou"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Latência Evento-Consumer</span><span class="chart-cur" id="cv-lat">-</span></div><canvas class="spark" id="ch-lat"></canvas></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Entregas acumuladas</span><span class="chart-cur" id="cv-dcum">-</span></div><canvas class="spark" id="ch-dcum"></canvas></div>
+  </div>
+  <div class="section-label">Metadados de ingestão</div><div class="raw-box" id="rt-meta">Aguardando dados...</div>
+</div>
+
+<div class="page" id="page-an">
+  <div class="section-label">Histórico analítico - Athena/S3 - atualiza a cada 30s</div>
+  <div class="notice" id="an-source">Aguardando consulta Athena...</div>
+  <div class="insight-grid">
+    <div class="insight"><div class="insight-lbl">Leitura rápida</div><div class="insight-main" id="an-insight-volume">-</div><div class="insight-sub">volume registrado na partição atual</div></div>
+    <div class="insight"><div class="insight-lbl">Pico de movimento</div><div class="insight-main" id="an-insight-peak">-</div><div class="insight-sub">hora UTC com mais eventos</div></div>
+    <div class="insight"><div class="insight-lbl">Pedidos em aberto</div><div class="insight-main" id="an-insight-open">-</div><div class="insight-sub">pedidos ainda sem status final</div></div>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi" style="--c:var(--accent)"><div class="kpi-lbl">Eventos</div><div class="kpi-val" id="an-events">-</div><div class="kpi-sub">partição do dia</div></div>
+    <div class="kpi" style="--c:var(--teal)"><div class="kpi-lbl">Pedidos</div><div class="kpi-val" id="an-orders">-</div><div class="kpi-sub">distintos no Athena</div></div>
+    <div class="kpi" style="--c:var(--amber)"><div class="kpi-lbl">Em aberto</div><div class="kpi-val" id="an-open">-</div><div class="kpi-sub">status atual não final</div></div>
+    <div class="kpi" style="--c:var(--green)"><div class="kpi-lbl">Entregues</div><div class="kpi-val" id="an-delivered">-</div><div class="kpi-sub">último status DELIVERED</div></div>
+    <div class="kpi" style="--c:var(--red)"><div class="kpi-lbl">Cancelados</div><div class="kpi-val" id="an-cancelled">-</div><div class="kpi-sub">último status CANCELLED</div></div>
+    <div class="kpi" style="--c:var(--green)"><div class="kpi-lbl">Taxa Entrega</div><div class="kpi-val" id="an-delivery-rate">-</div><div class="kpi-sub">entregues / pedidos</div></div>
+    <div class="kpi" style="--c:var(--amber)"><div class="kpi-lbl">Taxa Cancelamento</div><div class="kpi-val" id="an-cancel-rate">-</div><div class="kpi-sub">cancelados / pedidos</div></div>
+  </div>
+  <div class="chart-grid">
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Distribuição atual</span><span class="chart-cur" id="an-status-total">-</span></div><div class="donut-wrap"><div class="donut" id="an-status-donut"></div><div class="legend" id="an-status-legend"></div></div></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Status atual detalhado</span><span class="chart-cur" id="an-status-bars-total">-</span></div><div class="list" id="an-status-list"></div></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Eventos por tipo</span><span class="chart-cur" id="an-type-total">-</span></div><div class="list" id="an-type-list"></div></div>
+    <div class="chart-card"><div class="chart-hdr"><span class="chart-ttl">Eventos por hora UTC</span><span class="chart-cur" id="an-hour-total">-</span></div><canvas class="spark" id="ch-athena-hour"></canvas></div>
+  </div>
+</div>
+
+<footer>DijkFood Metrics &nbsp;·&nbsp; <span id="footer-ts">-</span></footer>
+<script>
+const $=id=>document.getElementById(id);
+const N=(v,d=0)=>v==null?'-':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+const P=v=>v==null?'-':N(v,1)+'%';
+const MS=v=>v==null?'-':Math.round(v)+' ms';
+function switchTab(name){['rt','an'].forEach(t=>{$('page-'+t).classList.toggle('active',t===name);$('tab-'+t).classList.toggle('active',t===name);});}
+function makeWS(path,onMsg,dotId){const dot=$(dotId);let retryMs=1000;function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(proto+'://'+location.host+path);ws.onopen=()=>{dot.className='dot live';retryMs=1000;};ws.onmessage=e=>{try{onMsg(JSON.parse(e.data));}catch(_){}};ws.onclose=ws.onerror=()=>{dot.className='dot error';setTimeout(connect,Math.min(retryMs*=1.5,15000));};setInterval(()=>{if(ws.readyState===1)ws.send('ping');},10000);}connect();}
+function drawSpark(id,series,color){const c=$(id);if(!c||!series||series.length<2)return;const dpr=devicePixelRatio||1,W=c.offsetWidth||300,H=c.offsetHeight||68;c.width=W*dpr;c.height=H*dpr;const ctx=c.getContext('2d');ctx.scale(dpr,dpr);const vals=series.map(p=>Number(p.v??p.total_events??0));const mn=Math.min(...vals),mx=Math.max(...vals),rng=mx-mn||1;const toY=v=>H-5-((v-mn)/rng)*(H-10),toX=(i,l)=>(i/(l-1))*W;ctx.beginPath();vals.forEach((v,i)=>{const x=toX(i,vals.length),y=toY(v);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,color+'44');g.addColorStop(1,color+'00');ctx.fillStyle=g;ctx.fill();ctx.beginPath();vals.forEach((v,i)=>{const x=toX(i,vals.length),y=toY(v);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.strokeStyle=color;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();}
+function renderBars(id,rows,color){const root=$(id);const max=Math.max(...rows.map(r=>Number(r.value||0)),1);root.innerHTML=rows.length?'':'<div class="bar-label">Sem dados</div>';rows.forEach(row=>{const val=Number(row.value||0);const div=document.createElement('div');div.className='bar-row';div.innerHTML='<div class="bar-label" title="'+row.label+'">'+row.label+'</div><div class="bar-track"><div class="bar-fill" style="width:'+(val/max*100).toFixed(1)+'%;background:'+color+'"></div></div><div class="bar-num">'+N(val)+'</div>';root.appendChild(div);});}
+function renderDonut(rows){const donut=$('an-status-donut'),legend=$('an-status-legend');const colors=['#34c97a','#f5a623','#4f8ef7','#9b6dff','#26c6da','#e05454','#7a8099'];const total=rows.reduce((a,r)=>a+Number(r.value||0),0);if(!total){donut.style.background='var(--surf2)';legend.innerHTML='<div class="legend-row"><span></span><span class="legend-label">Sem dados</span><span class="legend-num">0</span></div>';return;}let start=0;const parts=[];legend.innerHTML='';rows.forEach((row,i)=>{const value=Number(row.value||0);const end=start+(value/total*100);const color=colors[i%colors.length];parts.push(color+' '+start.toFixed(2)+'% '+end.toFixed(2)+'%');start=end;const div=document.createElement('div');div.className='legend-row';div.innerHTML='<span class="swatch" style="background:'+color+'"></span><span class="legend-label" title="'+row.label+'">'+row.label+'</span><span class="legend-num">'+N(value)+'</span>';legend.appendChild(div);});donut.style.background='conic-gradient('+parts.join(',')+')';}
+makeWS('/ws',snap=>{$('rt-preparing').textContent=N(snap.orders_preparing);$('rt-waiting').textContent=N(snap.orders_waiting_courier);$('rt-delivering').textContent=N(snap.orders_delivering);$('rt-delivered').textContent=N(snap.orders_delivered??snap.orders_completed);$('rt-created-pm').textContent=N(snap.orders_created_per_minute);$('rt-total').textContent=N(snap.total_orders_processed);$('rt-couriers').textContent=N(snap.couriers_available);$('rt-lat-avg').textContent=MS(snap.event_to_consumer_latency_ms_avg_1m);const producedAt=snap?.meta?.last_event_produced_at_ms;$('rt-lat-dash').textContent=producedAt?MS(Date.now()-producedAt):'-';$('rt-meta').textContent=JSON.stringify(snap.meta||{},null,2);$('footer-ts').textContent=new Date().toLocaleTimeString('pt-BR');},'dot-rt');
+makeWS('/ws/realtime-rollup',snap=>{const s=snap.series||{};const charts=[['ch-thr',s.throughput,'#4f8ef7','cv-thr',v=>N(v,1)],['ch-cpm',s.created,'#26c6da','cv-cpm',v=>N(v)],['ch-prep',s.preparing,'#f5a623','cv-prep',v=>N(v)],['ch-del',s.delivering,'#4f8ef7','cv-del',v=>N(v)],['ch-cou',s.couriers,'#34c97a','cv-cou',v=>N(v)],['ch-lat',s.latency,'#e05454','cv-lat',v=>MS(v)],['ch-dcum',s.delivered_cum,'#34c97a','cv-dcum',v=>N(v)]];charts.forEach(([cid,data,color,vid,fmt])=>{drawSpark(cid,data,color);if(data&&data.length)$(vid).textContent=fmt(data[data.length-1].v);});},'dot-rt');
+async function refreshAthena(){try{const res=await fetch('/metrics/analytics');const snap=await res.json();$('dot-an').className=snap.error?'dot error':'dot live';const k=snap.kpis||{};const currentStatus=snap.current_status||snap.by_status||[];$('an-events').textContent=N(k.total_events);$('an-orders').textContent=N(k.total_orders);$('an-open').textContent=N(k.orders_open);$('an-delivered').textContent=N(k.orders_delivered);$('an-cancelled').textContent=N(k.orders_cancelled);$('an-delivery-rate').textContent=P(k.delivery_rate_pct);$('an-cancel-rate').textContent=P(k.cancel_rate_pct);const part=snap.partition?snap.partition.year+'-'+snap.partition.month+'-'+snap.partition.day:'-';$('an-source').textContent=snap.error?'Erro Athena: '+snap.error:'Fonte: Athena ('+snap.database+'.'+snap.table+') · partição UTC '+part+' · gerado em '+new Date(snap.generated_at).toLocaleTimeString('pt-BR');const peak=(snap.events_by_hour||[]).reduce((best,row)=>Number(row.total_events||0)>Number(best.total_events||0)?row:best,{hour:'-',total_events:0});$('an-insight-volume').textContent=N(k.total_orders)+' pedidos';$('an-insight-peak').textContent=peak.hour==='-'?'-':peak.hour+'h UTC · '+N(peak.total_events)+' eventos';$('an-insight-open').textContent=N(k.orders_open)+' pedidos';renderDonut(currentStatus);renderBars('an-status-list',currentStatus,'#4f8ef7');renderBars('an-type-list',snap.by_type||[],'#9b6dff');const statusTotal=currentStatus.reduce((a,r)=>a+Number(r.value||0),0);$('an-status-total').textContent=N(statusTotal);$('an-status-bars-total').textContent=N(statusTotal);$('an-type-total').textContent=N((snap.by_type||[]).reduce((a,r)=>a+Number(r.value||0),0));const hourly=(snap.events_by_hour||[]).map(r=>({v:Number(r.total_events||0)}));$('an-hour-total').textContent=N(hourly.reduce((a,r)=>a+r.v,0));drawSpark('ch-athena-hour',hourly,'#34c97a');}catch(err){$('dot-an').className='dot error';$('an-source').textContent='Erro ao buscar Athena: '+err;}}
+refreshAthena();setInterval(refreshAthena,30000);
+</script>
+</body>
+</html>
