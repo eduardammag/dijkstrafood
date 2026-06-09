@@ -1,4 +1,6 @@
 import os
+import time
+from random import shuffle
 from typing import Any, Dict, List
 
 import requests
@@ -27,6 +29,7 @@ COURIER_SIMULATOR_URL = os.getenv(
     "http://restaurant-simulator:8004",
 ).rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
+ROUTING_TIMEOUT_SECONDS = float(os.getenv("ROUTING_TIMEOUT_SECONDS", "10"))
 
 
 class DispatchRequest(BaseModel):
@@ -55,15 +58,15 @@ def get_available_couriers() -> list:
 def assign_courier_in_api(
     order_id: int,
     courier_id: int,
-    route_to_restaurant: list,
-    route_to_client: list,
+    route_to_restaurant: list | None = None,
+    route_to_client: list | None = None,
 ):
     response = requests.post(
         f"{API_URL}/orders/{order_id}/assign-courier",
         json={
             "courier_id": courier_id,
-            "route_to_pickup": route_to_restaurant,
-            "route_to_delivery": route_to_client,
+            "route_to_pickup": route_to_restaurant or [],
+            "route_to_delivery": route_to_client or [],
         },
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
@@ -98,7 +101,44 @@ def choose_courier(
         except Exception as exc:
             print(f"Graph matching failed, using geometric fallback: {exc}")
 
+    shuffle(eligible)
     return eligible[0]
+
+
+def reserve_courier(
+    order_id: int,
+    restaurant: Dict[str, Any],
+    customer: Dict[str, Any],
+    couriers: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    candidates = list(couriers)
+    last_conflict = None
+
+    while candidates:
+        selected = choose_courier(
+            restaurant=restaurant,
+            customer=customer,
+            couriers=candidates,
+        )
+
+        try:
+            assign_courier_in_api(order_id=order_id, courier_id=int(selected["id"]))
+            return selected
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code != 409:
+                raise
+
+            last_conflict = exc
+            candidates = [
+                courier
+                for courier in candidates
+                if int(courier["id"]) != int(selected["id"])
+            ]
+
+    if last_conflict is not None:
+        raise last_conflict
+    raise RuntimeError("No courier available for allocation")
 
 
 def calculate_routes(
@@ -106,6 +146,7 @@ def calculate_routes(
     restaurant: Dict[str, Any],
     customer: Dict[str, Any],
 ) -> tuple[list, list]:
+    started_at = time.perf_counter()
     try:
         response = requests.post(
             ROUTING_URL,
@@ -114,17 +155,33 @@ def calculate_routes(
                 "restaurante": restaurant,
                 "cliente": customer,
             },
-            timeout=10,
+            timeout=ROUTING_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
 
         payload = response.json()
         route_to_restaurant = payload["route_to_pickup"]
         route_to_client = payload["route_to_delivery"]
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            "Routing completed "
+            f"courier_id={courier.get('id')} "
+            f"restaurant_id={restaurant.get('id')} "
+            f"client_id={customer.get('id')} "
+            f"elapsed_ms={elapsed_ms:.1f}"
+        )
         return route_to_restaurant, route_to_client
 
     except requests.exceptions.RequestException as exc:
-        print(f"Routing service failed; using straight line route: {exc}")
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            "Routing service failed; using straight line route "
+            f"courier_id={courier.get('id')} "
+            f"restaurant_id={restaurant.get('id')} "
+            f"client_id={customer.get('id')} "
+            f"elapsed_ms={elapsed_ms:.1f} "
+            f"error={exc}"
+        )
 
         route_to_restaurant = gerar_rota_simples(
             (courier["lat"], courier["lon"]),
@@ -213,24 +270,18 @@ def dispatch_delivery(body: DispatchRequest):
             "lon": float(order_data["client_longitude"]),
         }
 
-        allocation = alocar_entrega(
-            {
-                "order_id": order_id,
-                "restaurante": restaurant,
-                "cliente": customer,
-                "entregadores": couriers,
-            }
-        )
-
-        courier_id = int(allocation["entregador_id"])
-        route_to_pickup = allocation["route_to_pickup"]
-        route_to_delivery = allocation["route_to_delivery"]
-
-        assign_courier_in_api(
+        selected_courier = reserve_courier(
             order_id=order_id,
-            courier_id=courier_id,
-            route_to_restaurant=route_to_pickup,
-            route_to_client=route_to_delivery,
+            restaurant=restaurant,
+            customer=customer,
+            couriers=couriers,
+        )
+        courier_id = int(selected_courier["id"])
+
+        route_to_pickup, route_to_delivery = calculate_routes(
+            courier=selected_courier,
+            restaurant=restaurant,
+            customer=customer,
         )
 
         simulator_response = trigger_courier_simulation(

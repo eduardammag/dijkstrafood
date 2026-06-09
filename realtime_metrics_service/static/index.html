@@ -94,6 +94,18 @@
       <div class="value" id="total_orders_processed">0</div>
     </div>
     <div class="card">
+      <h2>Entregadores cadastrados</h2>
+      <div class="value" id="couriers_total_registered">0</div>
+    </div>
+    <div class="card">
+      <h2>Entregadores disponiveis na API</h2>
+      <div class="value" id="couriers_available_api">0</div>
+    </div>
+    <div class="card">
+      <h2>Entregadores vistos em eventos</h2>
+      <div class="value" id="couriers_seen_in_events">0</div>
+    </div>
+    <div class="card">
       <h2>Latencia evento - consumer (media 1m)</h2>
       <div class="value" id="event_to_consumer_latency_ms_avg_1m">0 ms</div>
     </div>
@@ -135,6 +147,9 @@
       updateMetric("orders_completed", payload.orders_completed ?? payload.orders_delivered);
       updateMetric("orders_created_per_minute", payload.orders_created_per_minute);
       updateMetric("total_orders_processed", payload.total_orders_processed);
+      updateMetric("couriers_total_registered", payload.couriers_total_registered);
+      updateMetric("couriers_available_api", payload.couriers_available_api);
+      updateMetric("couriers_seen_in_events", payload.couriers_seen_in_events);
       updateLatency("event_to_consumer_latency_ms_avg_1m", payload.event_to_consumer_latency_ms_avg_1m);
 
       const producedAtMs = payload?.meta?.last_event_produced_at_ms;

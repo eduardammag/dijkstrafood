@@ -70,6 +70,12 @@ class ApiClient:
         }
         return await self._request("POST", "/users", json=payload)
 
+    async def list_users(self, user_type: str | None = None) -> RequestResult:
+        path = "/users"
+        if user_type:
+            path = f"{path}?user_type={user_type}"
+        return await self._request("GET", path)
+
     async def create_courier(self, courier: Courier) -> RequestResult:
         payload = {
             "user_id": courier.user_id,
@@ -77,6 +83,9 @@ class ApiClient:
             "is_available": courier.is_available,
         }
         return await self._request("POST", "/couriers", json=payload)
+
+    async def list_couriers(self) -> RequestResult:
+        return await self._request("GET", "/couriers")
 
     async def create_restaurant(self, restaurant: Restaurant) -> RequestResult:
         payload = {
@@ -87,6 +96,9 @@ class ApiClient:
             "creator_user_id": restaurant.creator_user_id,
         }
         return await self._request("POST", "/restaurants", json=payload)
+
+    async def list_restaurants(self) -> RequestResult:
+        return await self._request("GET", "/restaurants")
 
     async def create_order(self, client_id: int, restaurant_id: int, items: list[dict]) -> RequestResult:
         payload = {

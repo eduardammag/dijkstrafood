@@ -2,6 +2,7 @@ import os
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -39,6 +40,8 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
 NOTIFY_TIMEOUT_SECONDS = float(os.getenv("NOTIFY_TIMEOUT_SECONDS", "2"))
 NOTIFY_MAX_ATTEMPTS = int(os.getenv("NOTIFY_MAX_ATTEMPTS", "3"))
 NOTIFY_RETRY_BACKOFF_SECONDS = float(os.getenv("NOTIFY_RETRY_BACKOFF_SECONDS", "0.2"))
+BACKGROUND_NOTIFICATION_WORKERS = int(os.getenv("BACKGROUND_NOTIFICATION_WORKERS", "16"))
+BACKGROUND_KINESIS_WORKERS = int(os.getenv("BACKGROUND_KINESIS_WORKERS", "8"))
 
 KINESIS_STREAM_NAME = os.getenv("KINESIS_STREAM_NAME", "").strip()
 KINESIS_ENDPOINT_URL = os.getenv("KINESIS_ENDPOINT_URL", "").strip() or None
@@ -53,6 +56,8 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 realtime_table = None
 kinesis_client = None
 analytics_stream = None
+notification_executor = ThreadPoolExecutor(max_workers=BACKGROUND_NOTIFICATION_WORKERS)
+kinesis_executor = ThreadPoolExecutor(max_workers=BACKGROUND_KINESIS_WORKERS)
 
 
 class Item(BaseModel):
@@ -174,7 +179,7 @@ def publish_kinesis_event(payload: dict):
 
 
 def dispatch_kinesis_event_async(payload: dict):
-    threading.Thread(target=publish_kinesis_event, args=(payload,), daemon=True).start()
+    kinesis_executor.submit(publish_kinesis_event, payload)
 
 
 def utc_now_iso() -> str:
@@ -465,11 +470,12 @@ def notify_restaurant_simulator_with_retry(order_id: int, restaurant_id: int, cl
 
 
 def dispatch_restaurant_notification_async(order_id: int, restaurant_id: int, client_id: int):
-    threading.Thread(
-        target=notify_restaurant_simulator_with_retry,
-        args=(order_id, restaurant_id, client_id),
-        daemon=True,
-    ).start()
+    notification_executor.submit(
+        notify_restaurant_simulator_with_retry,
+        order_id,
+        restaurant_id,
+        client_id,
+    )
 
 
 @asynccontextmanager
@@ -487,6 +493,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    notification_executor.shutdown(wait=False, cancel_futures=True)
+    kinesis_executor.shutdown(wait=False, cancel_futures=True)
     print("Shutting down API application")
 
 
@@ -556,6 +564,53 @@ def create_user(user: UserCreate):
     except Exception as exc:
         if conn is not None:
             conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@app.get("/users")
+def list_users(user_type: Optional[str] = None):
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            if user_type:
+                cur.execute(
+                    """
+                    SELECT user_id, user_name, email, phone, latitude, longitude, user_type
+                    FROM users
+                    WHERE user_type = %s
+                    ORDER BY user_id
+                    """,
+                    (user_type,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT user_id, user_name, email, phone, latitude, longitude, user_type
+                    FROM users
+                    ORDER BY user_id
+                    """
+                )
+            rows = cur.fetchall()
+
+        users = [
+            {
+                "user_id": row[0],
+                "user_name": row[1],
+                "email": row[2],
+                "phone": row[3],
+                "latitude": row[4],
+                "longitude": row[5],
+                "user_type": row[6],
+            }
+            for row in rows
+        ]
+        return {"users": users}
+
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         if conn is not None:

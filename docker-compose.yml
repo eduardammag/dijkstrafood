@@ -39,7 +39,6 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
       DYNAMO_TABLE: ${DYNAMO_TABLE}
       ANALYTICS_ENABLED: "false"
-      KINESIS_STREAM_NAME: ""
       DB_HOST: postgres
       DB_NAME: dijkstrafood
       DB_USER: postgres
@@ -60,7 +59,7 @@ services:
         condition: service_started
 
   restaurant-simulator:
-    build: ./restaurant-simulator
+    build: ./operational_simulator
     container_name: dijkstrafood-restaurant-simulator
     environment:
       API_URL: http://api:8000
@@ -102,9 +101,12 @@ services:
         condition: service_started
 
   realtime-metrics-service:
-    build: ./realtime-metrics-service
+    build:
+      context: .
+      dockerfile: realtime_metrics_service/Dockerfile
     container_name: dijkstrafood-realtime-metrics-service
     environment:
+      API_URL: http://api:8000
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}

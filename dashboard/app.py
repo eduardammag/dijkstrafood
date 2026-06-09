@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from consumer import KinesisConsumer
+from consumer import ApiInventoryPoller, KinesisConsumer
 from metrics_state import MetricsState
 
 
@@ -42,6 +42,7 @@ class WebSocketHub:
 app = FastAPI(title="Realtime Metrics Service")
 state = MetricsState()
 consumer = KinesisConsumer(state)
+inventory_poller = ApiInventoryPoller(state)
 hub = WebSocketHub()
 _broadcast_task: asyncio.Task | None = None
 
@@ -56,6 +57,7 @@ async def _broadcast_loop():
 async def startup_event():
     global _broadcast_task
     consumer.start()
+    inventory_poller.start()
     _broadcast_task = asyncio.create_task(_broadcast_loop())
 
 
@@ -63,6 +65,7 @@ async def startup_event():
 async def shutdown_event():
     global _broadcast_task
     consumer.stop()
+    inventory_poller.stop()
     if _broadcast_task is not None:
         _broadcast_task.cancel()
         try:

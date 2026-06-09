@@ -2,6 +2,7 @@ import os
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
@@ -22,12 +23,18 @@ PICKUP_WAIT_INTERVAL = float(os.getenv("PICKUP_WAIT_INTERVAL", "0.5"))
 DISPATCH_RETRY_INTERVAL_SECONDS = float(os.getenv("DISPATCH_RETRY_INTERVAL_SECONDS", "1.5"))
 DISPATCH_MAX_ATTEMPTS = int(os.getenv("DISPATCH_MAX_ATTEMPTS", "180"))
 IGNORE_LOCATION_ERRORS = os.getenv("IGNORE_LOCATION_ERRORS", "true").lower() == "true"
+RESTAURANT_SIMULATION_WORKERS = int(os.getenv("RESTAURANT_SIMULATION_WORKERS", "32"))
+DELIVERY_SIMULATION_WORKERS = int(os.getenv("DELIVERY_SIMULATION_WORKERS", "64"))
+DISPATCH_RETRY_WORKERS = int(os.getenv("DISPATCH_RETRY_WORKERS", "32"))
 
 app = FastAPI()
 active_orders: set[int] = set()
 active_lock = threading.Lock()
 active_deliveries: set[int] = set()
 delivery_lock = threading.Lock()
+restaurant_executor = ThreadPoolExecutor(max_workers=RESTAURANT_SIMULATION_WORKERS)
+delivery_executor = ThreadPoolExecutor(max_workers=DELIVERY_SIMULATION_WORKERS)
+dispatch_executor = ThreadPoolExecutor(max_workers=DISPATCH_RETRY_WORKERS)
 
 
 class RestaurantOrderRequest(BaseModel):
@@ -155,10 +162,13 @@ def ensure_delivery_dispatch(order_id: int) -> bool:
     return False
 
 
+def ensure_delivery_dispatch_async(order_id: int):
+    dispatch_executor.submit(ensure_delivery_dispatch, order_id)
+
+
 def simulate_restaurant(order_id: int):
     try:
         current_status = get_order_status(order_id)
-        delivery_dispatched = False
 
         if current_status in {"DELIVERED", "REJECTED"}:
             return
@@ -171,19 +181,14 @@ def simulate_restaurant(order_id: int):
             current_status = "CONFIRMED"
 
         if current_status == "CONFIRMED":
+            ensure_delivery_dispatch_async(order_id)
             time.sleep(CONFIRMED_DELAY_SECONDS)
             update_order_status(order_id, "PREPARING")
             current_status = "PREPARING"
 
         if current_status == "PREPARING":
-            # Never block status progression on dispatch retries.
-            # If dispatch is flaky, order still moves to READY_FOR_PICKUP.
-            delivery_dispatched = try_trigger_delivery_dispatch(order_id)
             time.sleep(PREPARING_DELAY_SECONDS)
             update_order_status(order_id, "READY_FOR_PICKUP")
-
-        if not delivery_dispatched:
-            ensure_delivery_dispatch(order_id)
 
     except Exception as exc:
         print(f"Restaurant simulation failed for order {order_id}: {exc}")
@@ -234,7 +239,7 @@ def start_order_simulation(body: RestaurantOrderRequest):
             return {"message": "Order already in simulation", "order_id": body.order_id}
         active_orders.add(body.order_id)
 
-    threading.Thread(target=simulate_restaurant, args=(body.order_id,), daemon=True).start()
+    restaurant_executor.submit(simulate_restaurant, body.order_id)
     return {"message": "Restaurant simulation started", "order_id": body.order_id}
 
 
@@ -245,7 +250,7 @@ def start_delivery(body: DeliverySimulationRequest):
             return {"message": "Delivery already in simulation", "order_id": body.order_id}
         active_deliveries.add(body.order_id)
 
-    threading.Thread(target=simulate_delivery, args=(body,), daemon=True).start()
+    delivery_executor.submit(simulate_delivery, body)
     return {
         "message": "Courier simulation started",
         "order_id": body.order_id,

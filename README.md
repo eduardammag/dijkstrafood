@@ -28,7 +28,7 @@ Load Simulator
 Responsabilidades:
 
 - `order-service`: API principal, persistencia, status, pedidos, usuarios, restaurantes, entregadores e localizacao.
-- `restaurant-simulator`: simula aceite/rejeicao, preparo/tempo operacional, aciona o despacho e tambem simula o deslocamento do entregador (`/deliveries`).
+- `operational_simulator`: simula aceite/rejeicao, preparo/tempo operacional, aciona o despacho e tambem simula o deslocamento do entregador (`/deliveries`).
 - `delivery_service`: serviço de sistema que escolhe entregador, calcula rotas e atribui o pedido.
 - `routing-service`: calcula rotas.
 - `realtime-metrics-service`: consome eventos do Kinesis, agrega métricas em memória e expõe API + WebSocket para dashboard.
@@ -113,7 +113,7 @@ Imagens esperadas pelo `config.json`:
 
 ```text
 marimarifr/dijkstrafood-api:latest
-marimarifr/dijkstrafood-restaurant-simulator:latest
+marimarifr/dijkstrafood-operational-simulator:latest
 marimarifr/dijkstrafood-delivery-service:latest
 marimarifr/dijkstrafood-routing-service:latest
 ```
@@ -122,16 +122,16 @@ Build/push das imagens:
 
 ```bash
 docker build -t marimarifr/dijkstrafood-api:latest ./order-service
-docker build -t marimarifr/dijkstrafood-restaurant-simulator:latest ./restaurant-simulator
+docker build -t marimarifr/dijkstrafood-operational-simulator:latest ./operational_simulator
 docker build -t marimarifr/dijkstrafood-delivery-service:latest ./delivery-service
 docker build -t marimarifr/dijkstrafood-routing-service:latest -f ./delivery-service/routing_service/Dockerfile ./delivery-service
-docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest ./realtime-metrics-service
+docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest -f ./realtime_metrics_service/Dockerfile .
 
 docker push marimarifr/dijkstrafood-api:latest
-docker push marimarifr/dijkstrafood-restaurant-simulator:latest
 docker push marimarifr/dijkstrafood-delivery-service:latest
 docker push marimarifr/dijkstrafood-routing-service:latest
 docker push marimarifr/dijkstrafood-realtime-metrics-service:latest
+docker push marimarifr/dijkstrafood-operational-simulator:latest
 ```
 
 O ambiente local usa:

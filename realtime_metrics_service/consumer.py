@@ -1,6 +1,8 @@
 import os
 import threading
 import time
+import json
+import urllib.request
 
 import boto3
 from botocore.exceptions import ClientError
@@ -126,3 +128,45 @@ class KinesisConsumer(threading.Thread):
             self._shard_iterators[shard_id] = iterator_response["ShardIterator"]
         except Exception as exc:
             print(f"[realtime-metrics] failed to reset iterator for {shard_id}: {exc}")
+
+
+class ApiInventoryPoller(threading.Thread):
+    def __init__(self, state: MetricsState):
+        super().__init__(daemon=True)
+        self.state = state
+        self._stop_event = threading.Event()
+        self.api_url = os.getenv("API_URL", "").rstrip("/")
+        self.poll_interval = float(os.getenv("API_INVENTORY_POLL_INTERVAL_SECONDS", "5.0"))
+        self.request_timeout = float(os.getenv("API_INVENTORY_REQUEST_TIMEOUT_SECONDS", "5.0"))
+
+    def stop(self):
+        self._stop_event.set()
+
+    def run(self):
+        if not self.api_url:
+            print("[realtime-metrics] API_URL is empty; inventory poller disabled")
+            return
+
+        print(f"[realtime-metrics] polling courier inventory from {self.api_url}")
+
+        while not self._stop_event.is_set():
+            try:
+                total_registered = self._fetch_count("/couriers", "couriers")
+                available = self._fetch_count("/couriers/available", "couriers")
+                self.state.update_courier_inventory(
+                    total_registered=total_registered,
+                    available=available,
+                )
+            except Exception as exc:
+                print(f"[realtime-metrics] inventory poll failed: {exc}")
+
+            time.sleep(self.poll_interval)
+
+    def _fetch_count(self, path: str, key: str) -> int:
+        url = f"{self.api_url}{path}"
+        with urllib.request.urlopen(url, timeout=self.request_timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        records = payload.get(key, [])
+        if not isinstance(records, list):
+            return 0
+        return len(records)

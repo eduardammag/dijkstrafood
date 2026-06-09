@@ -848,6 +848,8 @@ class Deployer:
         max_capacity: int,
         target_cpu: float = 60.0,
         target_memory: float = 70.0,
+        target_requests_per_target: float | None = None,
+        alb_resource_label: str | None = None,
     ):
         cluster = self.state["ecs_cluster"]
         resource_id = f"service/{cluster}/{service_name}"
@@ -892,7 +894,34 @@ class Deployer:
             },
         )
 
+        if target_requests_per_target is not None and alb_resource_label:
+            self.application_autoscaling.put_scaling_policy(
+                PolicyName=f"{self.project}-{service_name}-requests-target",
+                ServiceNamespace="ecs",
+                ResourceId=resource_id,
+                ScalableDimension="ecs:service:DesiredCount",
+                PolicyType="TargetTrackingScaling",
+                TargetTrackingScalingPolicyConfiguration={
+                    "TargetValue": target_requests_per_target,
+                    "PredefinedMetricSpecification": {
+                        "PredefinedMetricType": "ALBRequestCountPerTarget",
+                        "ResourceLabel": alb_resource_label,
+                    },
+                    "ScaleInCooldown": 120,
+                    "ScaleOutCooldown": 30,
+                },
+            )
+
         log(f"Auto scaling configurado para {service_name}")
+
+    @staticmethod
+    def _alb_request_count_resource_label(
+        load_balancer_arn: str,
+        target_group_arn: str,
+    ) -> str:
+        load_balancer_suffix = load_balancer_arn.split("loadbalancer/", 1)[1]
+        target_group_suffix = target_group_arn.split("targetgroup/", 1)[1]
+        return f"{load_balancer_suffix}/targetgroup/{target_group_suffix}"
 
     def deploy_services(self):
         imgs = self.config["dockerhub_images"]
@@ -962,6 +991,7 @@ class Deployer:
         td_delivery = self.register_task_definition("delivery-service", imgs["delivery_service"], 8001, delivery_env)
 
         realtime_env = {
+            "API_URL": internal_api_base,
             "AWS_REGION": self.region,
             "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
             "KINESIS_ITERATOR_TYPE": self.config.get("kinesis", {}).get("iterator_type", "LATEST"),
@@ -1005,6 +1035,11 @@ class Deployer:
             autoscaling["routing_service"]["max"],
             autoscaling["routing_service"]["target_cpu"],
             autoscaling["routing_service"].get("target_memory", 70.0),
+            autoscaling["routing_service"].get("target_requests_per_target"),
+            self._alb_request_count_resource_label(
+                self.state["alb"]["arn"],
+                internal_tgs["routing-service"],
+            ),
         )
 
         self.configure_autoscaling_for_service(
@@ -1069,6 +1104,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Caminho do config JSON")
     parser.add_argument("--scenario", choices=["normal", "peak", "special", 'teste'], default=None)
+    parser.add_argument("--duration-seconds", type=int, default=None)
     parser.add_argument("--run-simulator", action="store_true")
     parser.add_argument("--destroy-on-finish", action="store_true")
     args = parser.parse_args()
@@ -1084,8 +1120,11 @@ def main():
             config["api_url"] = deployer.state["api_url"]
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
             simulator_dir = Path(__file__).resolve().parent / "simulator"
+            simulator_cmd = [sys.executable, "main.py", "--scenario", args.scenario or "normal"]
+            if args.duration_seconds is not None:
+                simulator_cmd.extend(["--duration-seconds", str(args.duration_seconds)])
             subprocess.run(
-                [sys.executable, "main.py", "--scenario", args.scenario or "normal"],
+                simulator_cmd,
                 cwd=simulator_dir,
                 check=True,
             )

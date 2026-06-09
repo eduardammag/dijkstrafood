@@ -7,7 +7,7 @@
   "your_ip_cidr": "0.0.0.0/0",
   "dockerhub_images": {
     "api": "SEU_USUARIO/dijkstrafood-api:latest",
-    "restaurant_simulator": "SEU_USUARIO/dijkstrafood-restaurant-simulator:latest",
+    "restaurant_simulator": "SEU_USUARIO/dijkstrafood-operational-simulator:latest",
     "delivery_service": "SEU_USUARIO/dijkstrafood-delivery-service:latest",
     "routing_service": "SEU_USUARIO/dijkstrafood-routing-service:latest",
     "realtime_metrics_service": "SEU_USUARIO/dijkstrafood-realtime-metrics-service:latest"

@@ -64,7 +64,7 @@ class SimulatorConfig:
 TESTE_SCENARIO = ScenarioConfig(
     name="teste",
     orders_per_second=1,
-    duration_seconds=1,
+    duration_seconds=60,
 )
 
 NORMAL_SCENARIO = ScenarioConfig(
@@ -103,7 +103,7 @@ DEFAULT_CONFIG = SimulatorConfig(
         admins=1,
         clients=50,
         restaurants=20,
-        couriers=100,
+        couriers=150,
     ),
     delivery_flow=DeliveryFlowConfig(
         preparing_delay_seconds=0.5,
@@ -125,8 +125,17 @@ DEFAULT_CONFIG = SimulatorConfig(
 )
 
 
-def build_config(scenario_name: ScenarioName) -> SimulatorConfig:
+def build_config(
+    scenario_name: ScenarioName,
+    duration_seconds_override: int | None = None,
+) -> SimulatorConfig:
     scenario = SCENARIOS[scenario_name]
+    if duration_seconds_override is not None and duration_seconds_override > 0:
+        scenario = ScenarioConfig(
+            name=scenario.name,
+            orders_per_second=scenario.orders_per_second,
+            duration_seconds=duration_seconds_override,
+        )
     return SimulatorConfig(
         api=DEFAULT_CONFIG.api,
         population=DEFAULT_CONFIG.population,

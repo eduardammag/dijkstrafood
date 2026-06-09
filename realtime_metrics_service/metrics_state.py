@@ -13,6 +13,8 @@ class MetricsState:
         self._order_has_courier: dict[int, bool] = {}
         self._order_courier: dict[int, int] = {}
         self._courier_available: dict[int, bool] = {}
+        self._couriers_total_registered = 0
+        self._couriers_available_api = 0
 
         self._processed_timestamps: deque[float] = deque()
         self._created_timestamps: deque[float] = deque()
@@ -96,6 +98,11 @@ class MetricsState:
         while self._latency_samples and self._latency_samples[0][0] < cutoff:
             self._latency_samples.popleft()
 
+    def update_courier_inventory(self, total_registered: int, available: int):
+        with self._lock:
+            self._couriers_total_registered = max(0, int(total_registered))
+            self._couriers_available_api = max(0, int(available))
+
     def snapshot(self) -> dict:
         with self._lock:
             now = time.time()
@@ -130,6 +137,9 @@ class MetricsState:
                 "orders_created_per_minute": len(self._created_timestamps),
                 "total_orders_processed": len(self._seen_orders),
                 "couriers_available": couriers_available,
+                "couriers_total_registered": self._couriers_total_registered,
+                "couriers_available_api": self._couriers_available_api,
+                "couriers_seen_in_events": len(self._courier_available),
                 "orders_processed_per_minute": len(self._processed_timestamps),
                 "event_to_consumer_latency_ms_avg_1m": round(avg_latency_ms, 2),
                 "event_to_consumer_latency_ms_last": round(self._last_event_latency_ms or 0.0, 2),
@@ -141,6 +151,9 @@ class MetricsState:
                     "unknown_events": self._unknown_events,
                     "detected_event_formats": dict(self._format_counts),
                     "tracked_orders": len(self._order_status),
+                    "couriers_total_registered": self._couriers_total_registered,
+                    "couriers_available_api": self._couriers_available_api,
+                    "couriers_seen_in_events": len(self._courier_available),
                     "tracked_couriers": len(self._courier_available),
                 },
             }
