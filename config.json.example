@@ -19,6 +19,16 @@
     "poll_interval_seconds": 1,
     "records_limit": 500
   },
+  "redis": {
+    "enabled": true,
+    "url": "",
+    "cluster_id": "",
+    "node_type": "cache.t3.micro",
+    "engine_version": "7.1",
+    "port": 6379,
+    "key_prefix": "dijkfood:realtime",
+    "snapshot_ttl_seconds": 120
+  },
   "ecs": {
     "cpu": "1024",
     "memory": "2048",
@@ -27,6 +37,7 @@
     "desired_count_delivery_service": 1,
     "desired_count_routing_service": 1,
     "desired_count_realtime_metrics_service": 1,
+    "desired_count_redis_metrics_worker": 1,
     "assign_public_ip": true
   },
   "database": {
@@ -81,6 +92,12 @@
       "target_memory": 70.0
     },
     "realtime_metrics_service": {
+      "min": 1,
+      "max": 2,
+      "target_cpu": 60.0,
+      "target_memory": 70.0
+    },
+    "redis_metrics_worker": {
       "min": 1,
       "max": 2,
       "target_cpu": 60.0,

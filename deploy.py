@@ -78,6 +78,7 @@ class Deployer:
         self.kinesis = self.session.client("kinesis")
         self.firehose = self.session.client("firehose")
         self.glue = self.session.client("glue")
+        self.elasticache = self.session.client("elasticache")
         self.application_autoscaling = self.session.client("application-autoscaling")
         self.state = {"project": self.project, "region": self.region}
 
@@ -130,6 +131,7 @@ class Deployer:
             "alb": "ALB publico do DijkFood",
             "ecs": "Tarefas ECS do DijkFood",
             "rds": "Banco RDS do DijkFood",
+            "redis": "Redis ElastiCache do DijkFood",
         }
 
         for key, desc in definitions.items():
@@ -166,6 +168,15 @@ class Deployer:
                 "IpProtocol": "tcp",
                 "FromPort": 5432,
                 "ToPort": 5432,
+                "UserIdGroupPairs": [{"GroupId": sgs["ecs"]}],
+            }],
+        )
+        self._ensure_ingress(
+            sgs["redis"],
+            [{
+                "IpProtocol": "tcp",
+                "FromPort": 6379,
+                "ToPort": 6379,
                 "UserIdGroupPairs": [{"GroupId": sgs["ecs"]}],
             }],
         )
@@ -507,6 +518,94 @@ class Deployer:
             "username": db_cfg["username"],
         }
         log(f"RDS endpoint: {endpoint}")
+
+    def create_redis(self):
+        redis_cfg = self.config.get("redis", {})
+        if redis_cfg.get("url"):
+            self.state["redis"] = {
+                "enabled": True,
+                "managed": False,
+                "url": redis_cfg["url"],
+                "key_prefix": redis_cfg.get("key_prefix", "dijkfood:realtime"),
+                "snapshot_ttl_seconds": int(redis_cfg.get("snapshot_ttl_seconds", 120)),
+            }
+            log(f"Redis externo configurado: {redis_cfg['url']}")
+            return
+
+        if redis_cfg.get("enabled", True) is False:
+            self.state["redis"] = {"enabled": False, "managed": False}
+            log("Redis desabilitado por configuracao")
+            return
+
+        cluster_id = redis_cfg.get("cluster_id") or f"{self.project}-redis"
+        subnet_group_name = redis_cfg.get("subnet_group_name") or f"{self.project}-redis-subnet-group"
+        node_type = redis_cfg.get("node_type", "cache.t3.micro")
+        engine_version = redis_cfg.get("engine_version", "7.1")
+        port = int(redis_cfg.get("port", 6379))
+
+        try:
+            self.elasticache.describe_cache_subnet_groups(CacheSubnetGroupName=subnet_group_name)
+            log(f"Redis subnet group ja existe: {subnet_group_name}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code != "CacheSubnetGroupNotFoundFault":
+                raise
+            self.elasticache.create_cache_subnet_group(
+                CacheSubnetGroupName=subnet_group_name,
+                CacheSubnetGroupDescription="Subnet group Redis do DijkFood",
+                SubnetIds=self.state["subnet_ids"][:2],
+            )
+            log(f"Redis subnet group criado: {subnet_group_name}")
+
+        try:
+            self.elasticache.describe_cache_clusters(CacheClusterId=cluster_id, ShowCacheNodeInfo=True)
+            log(f"Redis ElastiCache ja existe: {cluster_id}")
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code != "CacheClusterNotFound":
+                raise
+            log(f"Criando Redis ElastiCache {cluster_id}")
+            self.elasticache.create_cache_cluster(
+                CacheClusterId=cluster_id,
+                Engine="redis",
+                EngineVersion=engine_version,
+                CacheNodeType=node_type,
+                NumCacheNodes=1,
+                Port=port,
+                CacheSubnetGroupName=subnet_group_name,
+                SecurityGroupIds=[self.state["security_groups"]["redis"]],
+            )
+
+        log("Esperando Redis ElastiCache ficar disponivel")
+        waiter = self.elasticache.get_waiter("cache_cluster_available")
+        waiter.wait(CacheClusterId=cluster_id)
+        cluster = self.elasticache.describe_cache_clusters(
+            CacheClusterId=cluster_id,
+            ShowCacheNodeInfo=True,
+        )["CacheClusters"][0]
+
+        nodes = cluster.get("CacheNodes", [])
+        endpoint = None
+        if nodes:
+            endpoint = nodes[0].get("Endpoint", {}).get("Address")
+            port = nodes[0].get("Endpoint", {}).get("Port", port)
+
+        if not endpoint:
+            raise RuntimeError(f"Redis {cluster_id} ficou disponivel, mas sem endpoint")
+
+        redis_url = f"redis://{endpoint}:{port}/0"
+        self.state["redis"] = {
+            "enabled": True,
+            "managed": True,
+            "cluster_id": cluster_id,
+            "subnet_group": subnet_group_name,
+            "endpoint": endpoint,
+            "port": port,
+            "url": redis_url,
+            "key_prefix": redis_cfg.get("key_prefix", "dijkfood:realtime"),
+            "snapshot_ttl_seconds": int(redis_cfg.get("snapshot_ttl_seconds", 120)),
+        }
+        log(f"Redis endpoint: {redis_url}")
 
     def ensure_log_group(self, name: str):
         groups = self.logs.describe_log_groups(logGroupNamePrefix=name).get("logGroups", [])
@@ -973,6 +1072,19 @@ class Deployer:
             "KINESIS_POLL_INTERVAL_SECONDS": str(self.config.get("kinesis", {}).get("poll_interval_seconds", 1)),
             "KINESIS_RECORDS_LIMIT": str(self.config.get("kinesis", {}).get("records_limit", 500)),
         }
+        redis_state = self.state.get("redis", {})
+        if redis_state.get("enabled") and redis_state.get("url"):
+            realtime_env.update(
+                {
+                    "REDIS_URL": redis_state["url"],
+                    "REDIS_KEY_PREFIX": redis_state.get("key_prefix", "dijkfood:realtime"),
+                    "REDIS_SNAPSHOT_TTL_SECONDS": str(redis_state.get("snapshot_ttl_seconds", 120)),
+                }
+            )
+        redis_worker_env = dict(realtime_env)
+        redis_worker_env["REDIS_WORKER_SNAPSHOT_INTERVAL_SECONDS"] = str(
+            self.config.get("redis", {}).get("worker_snapshot_interval_seconds", 1)
+        )
         if analytics_state.get("enabled"):
             realtime_env.update(
                 {
@@ -989,12 +1101,30 @@ class Deployer:
             8010,
             realtime_env,
         )
+        td_redis_worker = None
+        if redis_state.get("enabled") and redis_state.get("url"):
+            td_redis_worker = self.register_task_definition(
+                "redis-metrics-worker",
+                imgs["realtime_metrics_service"],
+                None,
+                redis_worker_env,
+                command=["python", "redis_metrics_worker.py"],
+            )
 
         self.create_or_update_service("api", td_api, self.config["ecs"]["desired_count_api"], "api", 8000, attach_to_alb=True)
         self.create_or_update_service("restaurant-simulator", td_restaurant_simulator, self.config["ecs"]["desired_count_restaurant_simulator"], "restaurant-simulator", 8004, attach_to_alb=True, target_group_arn=internal_tgs.get("restaurant-simulator"))
         self.create_or_update_service("routing-service", td_routing, self.config["ecs"]["desired_count_routing_service"], "routing-service", 8002, attach_to_alb=True, target_group_arn=internal_tgs.get("routing-service"))
         self.create_or_update_service("delivery-service", td_delivery, self.config["ecs"]["desired_count_delivery_service"], "delivery-service", 8001, attach_to_alb=True, target_group_arn=internal_tgs.get("delivery-service"))
         self.create_or_update_service("realtime-metrics-service", td_realtime, self.config["ecs"].get("desired_count_realtime_metrics_service", 1), "realtime-metrics-service", 8010, attach_to_alb=True, target_group_arn=internal_tgs.get("realtime-metrics-service"))
+        if td_redis_worker:
+            self.create_or_update_service(
+                "redis-metrics-worker",
+                td_redis_worker,
+                self.config["ecs"].get("desired_count_redis_metrics_worker", 1),
+                "redis-metrics-worker",
+                None,
+                attach_to_alb=False,
+            )
 
         autoscaling = self.config.get("autoscaling", {})
 
@@ -1038,6 +1168,14 @@ class Deployer:
                 autoscaling["realtime_metrics_service"]["target_cpu"],
                 autoscaling["realtime_metrics_service"].get("target_memory", 70.0),
             )
+        if "redis_metrics_worker" in autoscaling and redis_state.get("enabled"):
+            self.configure_autoscaling_for_service(
+                "redis-metrics-worker",
+                autoscaling["redis_metrics_worker"]["min"],
+                autoscaling["redis_metrics_worker"]["max"],
+                autoscaling["redis_metrics_worker"]["target_cpu"],
+                autoscaling["redis_metrics_worker"].get("target_memory", 70.0),
+            )
     def wait_for_api(self, timeout_seconds: int = 1200):
         dns = self.state["alb"]["dns_name"]
         url = f"http://{dns}/"
@@ -1061,6 +1199,8 @@ class Deployer:
         self.create_dynamodb()
         self.create_kinesis_stream()
         self.create_rds()
+        self.create_redis()
+        self.save_state()
         self.ensure_cluster()
         try:
             self.ensure_namespace()

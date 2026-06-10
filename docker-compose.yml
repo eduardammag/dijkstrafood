@@ -28,6 +28,17 @@ services:
       timeout: 5s
       retries: 12
 
+  redis:
+    image: redis:7-alpine
+    container_name: dijkstrafood-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   api:
     build: ./order-service
     container_name: dijkstrafood-api
@@ -39,7 +50,6 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
       DYNAMO_TABLE: ${DYNAMO_TABLE}
       ANALYTICS_ENABLED: "false"
-      KINESIS_STREAM_NAME: ""
       DB_HOST: postgres
       DB_NAME: dijkstrafood
       DB_USER: postgres
@@ -102,7 +112,7 @@ services:
         condition: service_started
 
   realtime-metrics-service:
-    build: ./realtime-metrics-service
+    build: ./realtime_metrics_service
     container_name: dijkstrafood-realtime-metrics-service
     environment:
       AWS_REGION: ${AWS_REGION:-us-east-1}
@@ -114,11 +124,16 @@ services:
       KINESIS_ITERATOR_TYPE: ${KINESIS_ITERATOR_TYPE:-LATEST}
       KINESIS_POLL_INTERVAL_SECONDS: ${KINESIS_POLL_INTERVAL_SECONDS:-1}
       KINESIS_RECORDS_LIMIT: ${KINESIS_RECORDS_LIMIT:-500}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-dijkfood:realtime}
+      REDIS_SNAPSHOT_TTL_SECONDS: ${REDIS_SNAPSHOT_TTL_SECONDS:-120}
     ports:
       - "8010:8010"
     depends_on:
       localstack:
         condition: service_started
+      redis:
+        condition: service_healthy
 
   kinesis-init:
     image: amazon/aws-cli:2.17.30

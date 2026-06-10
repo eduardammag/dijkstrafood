@@ -21,7 +21,8 @@ Load Simulator
   -> Restaurant Simulator (/deliveries)
   -> API / Order Service
   -> Kinesis Data Stream (eventos)
-  -> Realtime Metrics Service
+  -> Realtime Metrics Service (pipeline realtime)
+  -> Redis Metrics Worker -> Redis (pipeline redis)
   -> Dashboard Web (tempo real)
 ```
 
@@ -32,6 +33,8 @@ Responsabilidades:
 - `delivery_service`: serviço de sistema que escolhe entregador, calcula rotas e atribui o pedido.
 - `routing-service`: calcula rotas.
 - `realtime-metrics-service`: consome eventos do Kinesis, agrega métricas em memória e expõe API + WebSocket para dashboard.
+- `redis-metrics-worker`: consome o mesmo Kinesis em paralelo e grava snapshots no Redis/ElastiCache.
+- `redis`: armazena snapshots do pipeline Redis para comparacao de latencia no dashboard.
 - `simulator`: gerador de carga/populacao.
 
 ## Dashboard em Tempo Real
@@ -46,6 +49,8 @@ Componente:
   - Mantém métricas em memória (sem DynamoDB para métricas realtime).
   - API HTTP:
     - `GET /metrics`
+    - `GET /metrics/realtime-rollup`
+    - `GET /health/redis`
     - `GET /dashboard`
   - WebSocket:
     - `GET /ws`
@@ -140,7 +145,7 @@ O ambiente local usa:
 docker compose up --build
 ```
 
-No ambiente local, o `docker-compose.yml` inclui LocalStack para Kinesis e um container de inicializacao (`kinesis-init`) para criar o stream automaticamente.
+No ambiente local, o `docker-compose.yml` inclui LocalStack para Kinesis, Redis para snapshots realtime e um container de inicializacao (`kinesis-init`) para criar o stream automaticamente.
 
 Dashboard e API de métricas:
 
@@ -158,6 +163,9 @@ Variáveis de ambiente para o `realtime-metrics-service`:
 - `KINESIS_ITERATOR_TYPE` (opcional, default `LATEST`)
 - `KINESIS_POLL_INTERVAL_SECONDS` (opcional, default `1`)
 - `KINESIS_RECORDS_LIMIT` (opcional, default `500`)
+- `REDIS_URL` (opcional; local: `redis://redis:6379/0`)
+- `REDIS_KEY_PREFIX` (opcional, default `dijkfood:realtime`)
+- `REDIS_SNAPSHOT_TTL_SECONDS` (opcional, default `120`)
 
 Variáveis de ambiente adicionais no `order-service` para publicação de eventos:
 
@@ -207,7 +215,10 @@ Os arquivos `config.json`, `config_req.json` e `config.json.example` agora supor
 
 - `dockerhub_images.realtime_metrics_service`
 - bloco `kinesis` (nome do stream, shard count e parametros do consumer)
+- bloco `redis` (cria ElastiCache Redis por default; use `url` para um Redis externo)
 - `ecs.desired_count_realtime_metrics_service`
+- `ecs.desired_count_redis_metrics_worker`
 - `autoscaling.realtime_metrics_service`
+- `autoscaling.redis_metrics_worker`
 
-O `deploy.py` cria automaticamente o stream Kinesis e publica o endpoint do dashboard em `http://<alb>:8010/dashboard`.
+O `deploy.py` cria automaticamente o stream Kinesis, o Redis/ElastiCache, o worker Kinesis -> Redis e publica o endpoint do dashboard em `http://<alb>:8010/dashboard`.

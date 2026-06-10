@@ -37,6 +37,7 @@ def main():
     kinesis = session.client("kinesis")
     firehose = session.client("firehose")
     glue = session.client("glue")
+    elasticache = session.client("elasticache")
     sd = session.client("servicediscovery")
     logs = session.client("logs")
     iam = session.client("iam")
@@ -51,6 +52,7 @@ def main():
             "routing-service",
             "delivery-service",
             "realtime-metrics-service",
+            "redis-metrics-worker",
             "courier-simulator",
         ]:
             try:
@@ -91,6 +93,21 @@ def main():
         time.sleep(5)
     if rds_state.get("subnet_group"):
         safe(rds.delete_db_subnet_group, DBSubnetGroupName=rds_state["subnet_group"])
+
+    redis_state = state.get("redis", {})
+    if redis_state.get("managed") and redis_state.get("cluster_id"):
+        safe(elasticache.delete_cache_cluster, CacheClusterId=redis_state["cluster_id"])
+        for _ in range(60):
+            try:
+                elasticache.describe_cache_clusters(CacheClusterId=redis_state["cluster_id"])
+                time.sleep(10)
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") == "CacheClusterNotFound":
+                    break
+                log(f"Redis aguardando exclusao: {e}")
+                break
+    if redis_state.get("managed") and redis_state.get("subnet_group"):
+        safe(elasticache.delete_cache_subnet_group, CacheSubnetGroupName=redis_state["subnet_group"])
 
     if state.get("dynamodb_table"):
         safe(ddb.delete_table, TableName=state["dynamodb_table"])
@@ -147,6 +164,7 @@ def main():
             "routing-service",
             "delivery-service",
             "realtime-metrics-service",
+            "redis-metrics-worker",
             "courier-simulator",
         ]
     ]:

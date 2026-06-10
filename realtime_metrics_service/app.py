@@ -8,6 +8,7 @@ from consumer import KinesisConsumer
 from metrics_state import MetricsState
 from analytics_state import AnalyticsState
 from athena_analytics import AthenaAnalyticsClient
+from redis_snapshot_store import RedisSnapshotStore
 
 
 class WebSocketHub:
@@ -47,9 +48,11 @@ state     = MetricsState()
 analytics = AnalyticsState()
 athena_analytics = AthenaAnalyticsClient()
 consumer  = KinesisConsumer(state)
+redis_store = RedisSnapshotStore()
 
 realtime_hub  = WebSocketHub()
 analytics_hub = WebSocketHub()
+redis_hub = WebSocketHub()
 
 _broadcast_task: asyncio.Task | None = None
 
@@ -63,11 +66,17 @@ async def _broadcast_loop():
     """
     while True:
         snap = state.snapshot()
+        snap.setdefault("meta", {})["pipeline"] = "realtime-service"
 
         await realtime_hub.broadcast_json(snap)
 
         analytics.ingest(snap)
-        await analytics_hub.broadcast_json(analytics.snapshot())
+        analytics_snap = analytics.snapshot()
+        await analytics_hub.broadcast_json(analytics_snap)
+
+        redis_snap = redis_store.read_snapshot("redis-metrics")
+        if redis_snap:
+            await redis_hub.broadcast_json(redis_snap)
 
         await asyncio.sleep(1.0)
 
@@ -99,16 +108,32 @@ def root():
         "service":            "realtime-metrics-service",
         "dashboard":          "/dashboard",
         "metrics":            "/metrics",
+        "metrics_redis":      "/metrics/redis",
         "metrics_analytics":  "/metrics/analytics",
         "metrics_realtime_rollup": "/metrics/realtime-rollup",
+        "redis":              redis_store.status(),
         "websocket":          "/ws",
+        "websocket_redis":    "/ws/redis",
         "websocket_realtime_rollup": "/ws/realtime-rollup",
     }
 
 
 @app.get("/metrics")
 def get_metrics():
-    return state.snapshot()
+    snap = state.snapshot()
+    snap.setdefault("meta", {})["pipeline"] = "realtime-service"
+    return snap
+
+
+@app.get("/metrics/redis")
+def get_metrics_redis():
+    snap = redis_store.read_snapshot("redis-metrics")
+    if snap is None:
+        return {
+            "error": "redis metrics snapshot unavailable",
+            "redis": redis_store.status(),
+        }
+    return snap
 
 
 @app.get("/metrics/analytics")
@@ -119,6 +144,11 @@ def get_metrics_analytics():
 @app.get("/metrics/realtime-rollup")
 def get_metrics_realtime_rollup():
     return analytics.snapshot()
+
+
+@app.get("/health/redis")
+def get_redis_health():
+    return redis_store.status()
 
 
 @app.get("/dashboard")
@@ -156,3 +186,18 @@ async def websocket_analytics(websocket: WebSocket):
         await analytics_hub.disconnect(websocket)
     except Exception:
         await analytics_hub.disconnect(websocket)
+
+
+@app.websocket("/ws/redis")
+async def websocket_redis(websocket: WebSocket):
+    """Push Redis pipeline snapshot when available."""
+    await redis_hub.connect(websocket)
+    initial = redis_store.read_snapshot("redis-metrics")
+    await websocket.send_json(initial or {"error": "redis metrics snapshot unavailable"})
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await redis_hub.disconnect(websocket)
+    except Exception:
+        await redis_hub.disconnect(websocket)
