@@ -226,7 +226,12 @@ class Deployer:
             if code not in {"ResourceNotFoundException", "ValidationException"}:
                 raise
             log(f"Criando Kinesis stream {stream_name}")
-            self.kinesis.create_stream(StreamName=stream_name, ShardCount=shard_count)
+            try:
+                self.kinesis.create_stream(StreamName=stream_name, ShardCount=shard_count)
+            except ClientError as create_error:
+                if create_error.response.get("Error", {}).get("Code") != "ResourceInUseException":
+                    raise
+                log(f"Kinesis stream ja esta sendo criado: {stream_name}")
 
         waiter = self.kinesis.get_waiter("stream_exists")
         waiter.wait(StreamName=stream_name)
@@ -299,7 +304,12 @@ class Deployer:
             if e.response["Error"]["Code"] != "ResourceNotFoundException":
                 raise
             log(f"Criando Kinesis stream {stream_name}")
-            self.kinesis.create_stream(StreamName=stream_name, ShardCount=1)
+            try:
+                self.kinesis.create_stream(StreamName=stream_name, ShardCount=1)
+            except ClientError as create_error:
+                if create_error.response.get("Error", {}).get("Code") != "ResourceInUseException":
+                    raise
+                log(f"Kinesis stream ja esta sendo criado: {stream_name}")
             waiter = self.kinesis.get_waiter("stream_exists")
             waiter.wait(StreamName=stream_name)
             desc = self.kinesis.describe_stream_summary(StreamName=stream_name)["StreamDescriptionSummary"]
@@ -489,7 +499,10 @@ class Deployer:
                 DBInstanceIdentifier=db_identifier,
                 DBName=db_cfg["db_name"],
                 Engine="postgres",
+<<<<<<< HEAD
                 EngineVersion=db_cfg.get("engine_version", "15.18"),
+=======
+>>>>>>> 22adb3f163f569bbb3df14a7c418053e808c5a91
                 MasterUsername=db_cfg["username"],
                 MasterUserPassword=db_cfg["password"],
                 DBInstanceClass=db_cfg["instance_class"],
