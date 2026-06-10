@@ -489,7 +489,7 @@ class Deployer:
                 DBInstanceIdentifier=db_identifier,
                 DBName=db_cfg["db_name"],
                 Engine="postgres",
-                EngineVersion="15.12",
+                EngineVersion=db_cfg.get("engine_version", "15.18"),
                 MasterUsername=db_cfg["username"],
                 MasterUserPassword=db_cfg["password"],
                 DBInstanceClass=db_cfg["instance_class"],
