@@ -8,6 +8,7 @@ from consumer import KinesisConsumer
 from metrics_state import MetricsState
 from analytics_state import AnalyticsState
 from athena_analytics import AthenaAnalyticsClient
+from courier_capacity import fetch_courier_capacity
 from redis_snapshot_store import RedisSnapshotStore
 
 
@@ -44,17 +45,41 @@ class WebSocketHub:
 
 app = FastAPI(title="Realtime Metrics Service")
 
-state     = MetricsState()
+state = MetricsState()
 analytics = AnalyticsState()
 athena_analytics = AthenaAnalyticsClient()
-consumer  = KinesisConsumer(state)
+consumer = KinesisConsumer(state)
 redis_store = RedisSnapshotStore()
 
-realtime_hub  = WebSocketHub()
+realtime_hub = WebSocketHub()
 analytics_hub = WebSocketHub()
 redis_hub = WebSocketHub()
 
 _broadcast_task: asyncio.Task | None = None
+_last_courier_capacity: dict[str, int] | None = None
+
+
+def _build_realtime_snapshot() -> dict:
+    global _last_courier_capacity
+
+    snap = state.snapshot()
+    snap.setdefault("meta", {})["pipeline"] = "realtime-service"
+
+    courier_capacity, error = fetch_courier_capacity()
+    if courier_capacity is not None:
+        _last_courier_capacity = courier_capacity
+        snap.update(courier_capacity)
+        snap["meta"]["couriers_capacity_source"] = "order-service"
+        snap["meta"].pop("couriers_capacity_error", None)
+    elif _last_courier_capacity is not None:
+        snap.update(_last_courier_capacity)
+        snap["meta"]["couriers_capacity_source"] = "order-service-cache"
+        snap["meta"]["couriers_capacity_error"] = error
+    else:
+        snap["meta"]["couriers_capacity_source"] = "unavailable"
+        snap["meta"]["couriers_capacity_error"] = error
+
+    return snap
 
 
 async def _broadcast_loop():
@@ -65,8 +90,7 @@ async def _broadcast_loop():
       3. Broadcast the analytics snapshot to /ws/analytics
     """
     while True:
-        snap = state.snapshot()
-        snap.setdefault("meta", {})["pipeline"] = "realtime-service"
+        snap = _build_realtime_snapshot()
 
         await realtime_hub.broadcast_json(snap)
 
@@ -120,9 +144,7 @@ def root():
 
 @app.get("/metrics")
 def get_metrics():
-    snap = state.snapshot()
-    snap.setdefault("meta", {})["pipeline"] = "realtime-service"
-    return snap
+    return _build_realtime_snapshot()
 
 
 @app.get("/metrics/redis")
@@ -164,7 +186,7 @@ def get_dashboard():
 async def websocket_realtime(websocket: WebSocket):
     """Push realtime snapshot every second."""
     await realtime_hub.connect(websocket)
-    await websocket.send_json(state.snapshot())
+    await websocket.send_json(_build_realtime_snapshot())
     try:
         while True:
             await websocket.receive_text()

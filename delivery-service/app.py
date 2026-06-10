@@ -27,6 +27,9 @@ COURIER_SIMULATOR_URL = os.getenv(
     "http://restaurant-simulator:8004",
 ).rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
+ROUTING_REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("ROUTING_REQUEST_TIMEOUT_SECONDS", "4")
+)
 
 
 class DispatchRequest(BaseModel):
@@ -114,7 +117,7 @@ def calculate_routes(
                 "restaurante": restaurant,
                 "cliente": customer,
             },
-            timeout=10,
+            timeout=ROUTING_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
 

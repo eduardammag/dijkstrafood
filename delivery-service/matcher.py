@@ -11,25 +11,19 @@ def mapear_entregadores(G, entregadores):
 
 
 def encontrar_entregador(G, restaurante_node, entregador_nodes):
-    raios = [1000, 3000, 5000, 10000, None]
+    distancias = nx.single_source_dijkstra_path_length(
+        G,
+        restaurante_node,
+        weight="length",
+    )
 
-    for raio in raios:
-        distancias = nx.single_source_dijkstra_path_length(
-            G,
-            restaurante_node,
-            cutoff=raio,
-            weight="length"
-        )
+    melhor = None
+    menor = float("inf")
 
-        melhor = None
-        menor = float("inf")
+    for eid, node in entregador_nodes.items():
+        distancia = distancias.get(node)
+        if distancia is not None and distancia < menor:
+            melhor = eid
+            menor = distancia
 
-        for eid, node in entregador_nodes.items():
-            if node in distancias and distancias[node] < menor:
-                melhor = eid
-                menor = distancias[node]
-
-        if melhor:
-            return melhor
-
-    return None
+    return melhor

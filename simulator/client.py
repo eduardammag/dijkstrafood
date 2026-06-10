@@ -96,6 +96,9 @@ class ApiClient:
             "items": items,
         }
         return await self._request("POST", "/orders", json=payload)
+    
+    async def list_restaurants(self) -> RequestResult:
+        return await self._request("GET", "/restaurants")
 
     async def get_order(self, order_id: int) -> RequestResult:
         return await self._request("GET", f"/orders/{order_id}")

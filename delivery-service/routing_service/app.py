@@ -1,16 +1,21 @@
-from fastapi import FastAPI
-
-from graph import carregar_grafo
-from dijkstra import montar_rota_completa, rota_para_coords
-from pathlib import Path
 import sys
+from pathlib import Path
+
+from fastapi import FastAPI
 
 CURRENT_DIR = Path(__file__).resolve().parent
 PARENT_DIR = CURRENT_DIR.parent
 if str(PARENT_DIR) not in sys.path:
     sys.path.append(str(PARENT_DIR))
 
-from graph_utils import nearest_node
+try:
+    from .dijkstra import montar_rota_completa, rota_para_coords
+    from .graph import carregar_grafo
+    from .graph_utils import nearest_node
+except ImportError:
+    from dijkstra import montar_rota_completa, rota_para_coords
+    from graph import carregar_grafo
+    from graph_utils import nearest_node
 
 app = FastAPI()
 G = carregar_grafo()

@@ -23,6 +23,8 @@ PICKUP_WAIT_INTERVAL = float(os.getenv("PICKUP_WAIT_INTERVAL", "0.5"))
 DISPATCH_RETRY_INTERVAL_SECONDS = float(os.getenv("DISPATCH_RETRY_INTERVAL_SECONDS", "1.5"))
 DISPATCH_MAX_ATTEMPTS = int(os.getenv("DISPATCH_MAX_ATTEMPTS", "180"))
 IGNORE_LOCATION_ERRORS = os.getenv("IGNORE_LOCATION_ERRORS", "true").lower() == "true"
+MAX_PICKUP_ROUTE_POINTS = int(os.getenv("MAX_PICKUP_ROUTE_POINTS", "12"))
+MAX_DELIVERY_ROUTE_POINTS = int(os.getenv("MAX_DELIVERY_ROUTE_POINTS", "30"))
 RESTAURANT_SIMULATION_WORKERS = int(os.getenv("RESTAURANT_SIMULATION_WORKERS", "32"))
 DELIVERY_SIMULATION_WORKERS = int(os.getenv("DELIVERY_SIMULATION_WORKERS", "64"))
 DISPATCH_RETRY_WORKERS = int(os.getenv("DISPATCH_RETRY_WORKERS", "32"))
@@ -98,6 +100,22 @@ def normalize_route_point(point: Any) -> tuple[float, float]:
     if isinstance(point, (list, tuple)) and len(point) >= 2:
         return float(point[0]), float(point[1])
     raise ValueError(f"Invalid route point: {point}")
+
+
+def compress_route_points(route: list[Any], max_points: int) -> list[Any]:
+    if max_points <= 0 or len(route) <= max_points:
+        return route
+
+    if max_points == 1:
+        return [route[-1]]
+
+    last_index = len(route) - 1
+    sampled_indices = {
+        round(i * last_index / (max_points - 1))
+        for i in range(max_points)
+    }
+    ordered_indices = sorted(sampled_indices)
+    return [route[index] for index in ordered_indices]
 
 
 def wait_until_ready_for_pickup(order_id: int) -> str:
@@ -199,7 +217,16 @@ def simulate_restaurant(order_id: int):
 
 def simulate_delivery(body: DeliverySimulationRequest):
     try:
-        for point in body.route_to_pickup:
+        pickup_route = compress_route_points(
+            body.route_to_pickup,
+            MAX_PICKUP_ROUTE_POINTS,
+        )
+        delivery_route = compress_route_points(
+            body.route_to_delivery,
+            MAX_DELIVERY_ROUTE_POINTS,
+        )
+
+        for point in pickup_route:
             lat, lon = normalize_route_point(point)
             post_courier_location(body.courier_id, lat, lon, body.order_id)
             time.sleep(MOVE_INTERVAL)
@@ -212,7 +239,7 @@ def simulate_delivery(body: DeliverySimulationRequest):
         if transit_status not in {"IN_TRANSIT", "DELIVERED"}:
             update_order_status(body.order_id, "IN_TRANSIT")
 
-        for point in body.route_to_delivery:
+        for point in delivery_route:
             lat, lon = normalize_route_point(point)
             post_courier_location(body.courier_id, lat, lon, body.order_id)
             time.sleep(MOVE_INTERVAL)

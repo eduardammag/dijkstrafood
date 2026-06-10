@@ -130,7 +130,7 @@ docker build -t marimarifr/dijkstrafood-api:latest ./order-service
 docker build -t marimarifr/dijkstrafood-restaurant-simulator:latest ./restaurant-simulator
 docker build -t marimarifr/dijkstrafood-delivery-service:latest ./delivery-service
 docker build -t marimarifr/dijkstrafood-routing-service:latest -f ./delivery-service/routing_service/Dockerfile ./delivery-service
-docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest ./realtime-metrics-service
+docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest ./realtime_metrics_service
 
 docker push marimarifr/dijkstrafood-api:latest
 docker push marimarifr/dijkstrafood-restaurant-simulator:latest
@@ -144,6 +144,10 @@ O ambiente local usa:
 ```bash
 docker compose up --build
 ```
+
+Observacao:
+
+- O `routing-service` deve subir como modulo `routing_service.app:app`, entao os imports internos do pacote precisam ser relativos/qualificados pelo pacote.
 
 No ambiente local, o `docker-compose.yml` inclui LocalStack para Kinesis, Redis para snapshots realtime e um container de inicializacao (`kinesis-init`) para criar o stream automaticamente.
 

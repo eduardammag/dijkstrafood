@@ -82,6 +82,15 @@ class Deployer:
         self.application_autoscaling = self.session.client("application-autoscaling")
         self.state = {"project": self.project, "region": self.region}
 
+    def _service_config_key(self, service_name: str) -> str:
+        return service_name.replace("-", "_")
+
+    def _task_resources_for(self, service_name: str) -> tuple[str, str]:
+        service_cfg = self.config.get(self._service_config_key(service_name), {})
+        cpu = str(service_cfg.get("cpu", self.config["ecs"]["cpu"]))
+        memory = str(service_cfg.get("memory", self.config["ecs"]["memory"]))
+        return cpu, memory
+
     def save_state(self):
         STATE_FILE.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
 
@@ -840,6 +849,7 @@ class Deployer:
         family = f"{self.project}-{name}"
         log_group = f"/ecs/{self.project}/{name}"
         self.ensure_log_group(log_group)
+        task_cpu, task_memory = self._task_resources_for(name)
         container = {
             "name": name,
             "image": image,
@@ -863,8 +873,8 @@ class Deployer:
             family=family,
             requiresCompatibilities=["FARGATE"],
             networkMode="awsvpc",
-            cpu=self.config["ecs"]["cpu"],
-            memory=self.config["ecs"]["memory"],
+            cpu=task_cpu,
+            memory=task_memory,
             executionRoleArn=self.state["iam"]["ecs_execution_role_arn"],
             taskRoleArn=self.state["iam"]["ecs_task_role_arn"],
             runtimePlatform={"operatingSystemFamily": "LINUX", "cpuArchitecture": "X86_64"},
@@ -1073,6 +1083,7 @@ class Deployer:
 
         realtime_env = {
             "AWS_REGION": self.region,
+            "API_URL": internal_api_base,
             "KINESIS_STREAM_NAME": (
                 analytics_state["kinesis_stream_name"]
                 if analytics_state.get("enabled")
@@ -1081,6 +1092,7 @@ class Deployer:
             "KINESIS_ITERATOR_TYPE": self.config.get("kinesis", {}).get("iterator_type", "LATEST"),
             "KINESIS_POLL_INTERVAL_SECONDS": str(self.config.get("kinesis", {}).get("poll_interval_seconds", 1)),
             "KINESIS_RECORDS_LIMIT": str(self.config.get("kinesis", {}).get("records_limit", 500)),
+            "REQUEST_TIMEOUT_SECONDS": "15",
         }
         redis_state = self.state.get("redis", {})
         if redis_state.get("enabled") and redis_state.get("url"):

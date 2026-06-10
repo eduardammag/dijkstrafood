@@ -1,8 +1,16 @@
-import math
+import pickle
+from pathlib import Path
+
 import networkx as nx
+from scipy.spatial import cKDTree
 
 
-def load_graph(path: str):
+def _cache_path_for(graph_path: str) -> Path:
+    source_path = Path(graph_path)
+    return source_path.with_suffix(".pkl")
+
+
+def _build_graph_from_graphml(path: str):
     raw = nx.read_graphml(path)
     graph = nx.Graph()
 
@@ -31,14 +39,47 @@ def load_graph(path: str):
     return graph
 
 
-def nearest_node(graph, lon: float, lat: float):
-    best_node = None
-    best_distance = math.inf
+def _write_graph_cache(cache_path: Path, graph) -> None:
+    with cache_path.open("wb") as cache_file:
+        pickle.dump(graph, cache_file, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _read_graph_cache(cache_path: Path):
+    with cache_path.open("rb") as cache_file:
+        return pickle.load(cache_file)
+
+
+def _ensure_spatial_index(graph) -> None:
+    if "node_ids" in graph.graph and "node_kdtree" in graph.graph:
+        return
+
+    node_ids = []
+    coordinates = []
 
     for node_id, attrs in graph.nodes(data=True):
-        distance = (attrs["x"] - lon) ** 2 + (attrs["y"] - lat) ** 2
-        if distance < best_distance:
-            best_distance = distance
-            best_node = node_id
+        node_ids.append(node_id)
+        coordinates.append((attrs["x"], attrs["y"]))
 
-    return best_node
+    graph.graph["node_ids"] = node_ids
+    graph.graph["node_kdtree"] = cKDTree(coordinates)
+
+
+def load_graph(path: str):
+    source_path = Path(path)
+    cache_path = _cache_path_for(path)
+
+    use_cache = cache_path.exists() and cache_path.stat().st_mtime >= source_path.stat().st_mtime
+    if use_cache:
+        graph = _read_graph_cache(cache_path)
+    else:
+        graph = _build_graph_from_graphml(path)
+        _write_graph_cache(cache_path, graph)
+
+    _ensure_spatial_index(graph)
+    return graph
+
+
+def nearest_node(graph, lon: float, lat: float):
+    _ensure_spatial_index(graph)
+    _distance, index = graph.graph["node_kdtree"].query((lon, lat))
+    return graph.graph["node_ids"][index]

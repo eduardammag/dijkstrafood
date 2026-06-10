@@ -1,5 +1,9 @@
 from pathlib import Path
-from graph_utils import load_graph
+
+try:
+    from .graph_utils import load_graph
+except ImportError:
+    from graph_utils import load_graph
 
 CURRENT_DIR = Path(__file__).resolve().parent
 

@@ -1,7 +1,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from client import ApiClient
 from config import SimulatorConfig
@@ -22,6 +22,7 @@ class LoadTestResult:
     failed_orders: int
     emission_elapsed_seconds: float
     end_to_end_elapsed_seconds: float
+    failure_examples: List[str]
 
     @property
     def configured_throughput(self) -> float:
@@ -103,10 +104,13 @@ class LoadRunner:
         accepted_orders = 0
         delivered_orders = 0
         failed_orders = 0
+        failure_examples: List[str] = []
 
         for result in results:
             if isinstance(result, Exception):
                 failed_orders += 1
+                if len(failure_examples) < 5:
+                    failure_examples.append(f"exception: {result}")
                 continue
 
             if result.created_order.success:
@@ -116,6 +120,8 @@ class LoadRunner:
                 delivered_orders += 1
             else:
                 failed_orders += 1
+                if len(failure_examples) < 5:
+                    failure_examples.append(self._describe_failure(result))
 
         return LoadTestResult(
             scenario_name=scenario.name,
@@ -128,4 +134,19 @@ class LoadRunner:
             failed_orders=failed_orders,
             emission_elapsed_seconds=emission_elapsed_seconds,
             end_to_end_elapsed_seconds=end_to_end_elapsed_seconds,
+            failure_examples=failure_examples,
         )
+
+    def _describe_failure(self, result: WorkflowResult) -> str:
+        if not result.created_order.success:
+            return (
+                "create_order_failed "
+                f"status={result.created_order.status_code} "
+                f"error={result.created_order.error}"
+            )
+
+        if result.error is not None:
+            return result.error
+
+        final_status: Optional[str] = result.final_status
+        return f"workflow_failed order_id={result.order_id} final_status={final_status}"

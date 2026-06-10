@@ -59,6 +59,10 @@ def print_load_test_summary(result: LoadTestResult):
     print(f"Accepted Throughput: {result.accepted_throughput:.2f} orders/s")
     print(f"Delivered Throughput: {result.delivered_throughput:.2f} orders/s")
     print("========================================")
+    if result.failure_examples:
+        print("\nFailure examples:")
+        for example in result.failure_examples:
+            print(f"  - {example}")
 
 
 def print_metrics(metrics: MetricsCollector):

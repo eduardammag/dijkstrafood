@@ -64,13 +64,13 @@ class SimulatorConfig:
 TESTE_SCENARIO = ScenarioConfig(
     name="teste",
     orders_per_second=1,
-    duration_seconds=1,
+    duration_seconds=10,
 )
 
 NORMAL_SCENARIO = ScenarioConfig(
     name="normal",
     orders_per_second=10,
-    duration_seconds=60,
+    duration_seconds=30,
 )
 
 PEAK_SCENARIO = ScenarioConfig(
@@ -103,7 +103,7 @@ DEFAULT_CONFIG = SimulatorConfig(
         admins=1,
         clients=50,
         restaurants=20,
-        couriers=100,
+        couriers=150,
     ),
     delivery_flow=DeliveryFlowConfig(
         preparing_delay_seconds=0.5,
