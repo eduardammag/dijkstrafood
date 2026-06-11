@@ -425,7 +425,7 @@ makeWS('/ws', snap => {
   $('rt-lat-avg').textContent    = MS(snap.event_to_consumer_latency_ms_avg_1m);
 
   const producedAt = snap?.meta?.last_event_produced_at_ms;
-  $('rt-lat-dash').textContent = producedAt ? MS(Date.now() - producedAt) : '— ms';
+  $('rt-lat-dash').textContent = producedAt ? MS(Math.max(0, Date.now() - Number(producedAt))) : '— ms';
 
   $('rt-meta').textContent = JSON.stringify(snap.meta || {}, null, 2);
   $('footer-ts').textContent = new Date().toLocaleTimeString('pt-BR');

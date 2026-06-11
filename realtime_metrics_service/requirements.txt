@@ -3,3 +3,4 @@ uvicorn
 boto3
 websockets
 redis
+pyspark

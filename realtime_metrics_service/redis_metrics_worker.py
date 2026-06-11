@@ -21,9 +21,11 @@ def main():
     try:
         while True:
             snap = state.snapshot()
-            snap.setdefault("meta", {})["pipeline"] = "redis"
+            snap.setdefault("meta", {})["pipeline"] = "redis-pubsub"
             snap["meta"]["redis_status"] = redis_store.status()
+            snap["meta"]["redis_published_at_ms"] = int(time.time() * 1000)
             redis_store.write_snapshot("redis-metrics", snap)
+            redis_store.publish_snapshot("redis-metrics", snap)
             time.sleep(interval)
     finally:
         consumer.stop()

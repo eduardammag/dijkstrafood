@@ -70,7 +70,7 @@ services:
         condition: service_started
 
   restaurant-simulator:
-    build: ./restaurant-simulator
+    build: ./operational_simulator
     container_name: dijkstrafood-restaurant-simulator
     environment:
       API_URL: http://api:8000
@@ -126,9 +126,38 @@ services:
       KINESIS_RECORDS_LIMIT: ${KINESIS_RECORDS_LIMIT:-500}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-dijkfood:realtime}
+      REDIS_CHANNEL_PREFIX: ${REDIS_CHANNEL_PREFIX:-dijkfood:realtime}
       REDIS_SNAPSHOT_TTL_SECONDS: ${REDIS_SNAPSHOT_TTL_SECONDS:-120}
+      ENABLE_PYSPARK_DIRECT: ${ENABLE_PYSPARK_DIRECT:-true}
+      PYSPARK_DIRECT_INTERVAL_SECONDS: ${PYSPARK_DIRECT_INTERVAL_SECONDS:-1}
+      LATENCY_METRICS_PATH: ${LATENCY_METRICS_PATH:-/app/latency_metrics.jsonl}
     ports:
       - "8010:8010"
+    depends_on:
+      localstack:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  redis-metrics-worker:
+    build: ./realtime_metrics_service
+    container_name: dijkstrafood-redis-metrics-worker
+    command: ["python", "redis_metrics_worker.py"]
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      KINESIS_STREAM_NAME: ${KINESIS_STREAM_NAME:-dijkfood-order-events}
+      KINESIS_ENDPOINT_URL: http://localstack:4566
+      KINESIS_ITERATOR_TYPE: ${KINESIS_ITERATOR_TYPE:-LATEST}
+      KINESIS_POLL_INTERVAL_SECONDS: ${KINESIS_POLL_INTERVAL_SECONDS:-1}
+      KINESIS_RECORDS_LIMIT: ${KINESIS_RECORDS_LIMIT:-500}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-dijkfood:realtime}
+      REDIS_CHANNEL_PREFIX: ${REDIS_CHANNEL_PREFIX:-dijkfood:realtime}
+      REDIS_SNAPSHOT_TTL_SECONDS: ${REDIS_SNAPSHOT_TTL_SECONDS:-120}
+      REDIS_WORKER_SNAPSHOT_INTERVAL_SECONDS: ${REDIS_WORKER_SNAPSHOT_INTERVAL_SECONDS:-1}
     depends_on:
       localstack:
         condition: service_started

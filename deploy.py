@@ -58,6 +58,21 @@ def log(msg: str):
     print(f"[deploy] {msg}", flush=True)
 
 
+def validate_docker_images(images: Dict[str, str]):
+    invalid = {
+        service: image
+        for service, image in images.items()
+        if not image or "SEU_USUARIO" in image
+    }
+    if invalid:
+        lines = "\n".join(f"  - {service}: {image}" for service, image in invalid.items())
+        raise RuntimeError(
+            "As imagens Docker abaixo estao invalidas no config.json. "
+            "Substitua os placeholders antes do deploy:\n"
+            f"{lines}"
+        )
+
+
 class Deployer:
     def __init__(self, config: Dict):
         self.config = config
@@ -836,7 +851,16 @@ class Deployer:
         self.state["internal_target_groups"] = internal_tgs
         log("Target groups internos configurados")
 
-    def register_task_definition(self, name: str, image: str, port: Optional[int], env: Dict[str, str], command: Optional[List[str]] = None):
+    def register_task_definition(
+        self,
+        name: str,
+        image: str,
+        port: Optional[int],
+        env: Dict[str, str],
+        command: Optional[List[str]] = None,
+        cpu: Optional[str] = None,
+        memory: Optional[str] = None,
+    ):
         family = f"{self.project}-{name}"
         log_group = f"/ecs/{self.project}/{name}"
         self.ensure_log_group(log_group)
@@ -863,8 +887,8 @@ class Deployer:
             family=family,
             requiresCompatibilities=["FARGATE"],
             networkMode="awsvpc",
-            cpu=self.config["ecs"]["cpu"],
-            memory=self.config["ecs"]["memory"],
+            cpu=cpu or self.config["ecs"]["cpu"],
+            memory=memory or self.config["ecs"]["memory"],
             executionRoleArn=self.state["iam"]["ecs_execution_role_arn"],
             taskRoleArn=self.state["iam"]["ecs_task_role_arn"],
             runtimePlatform={"operatingSystemFamily": "LINUX", "cpuArchitecture": "X86_64"},
@@ -874,7 +898,17 @@ class Deployer:
         self.state.setdefault("task_definitions", {})[name] = arn
         return arn
 
-    def create_or_update_service(self, service_name: str, task_def_arn: str, desired_count: int, container_name: str, container_port: Optional[int], attach_to_alb: bool = False, target_group_arn: Optional[str] = None):
+    def create_or_update_service(
+        self,
+        service_name: str,
+        task_def_arn: str,
+        desired_count: int,
+        container_name: str,
+        container_port: Optional[int],
+        attach_to_alb: bool = False,
+        target_group_arn: Optional[str] = None,
+        health_check_grace_period_seconds: Optional[int] = None,
+    ):
         cluster = self.state["ecs_cluster"]
         subnets = self.state["subnet_ids"][:2]
         ecs_sg = self.state["security_groups"]["ecs"]
@@ -905,6 +939,8 @@ class Deployer:
                 "containerName": container_name,
                 "containerPort": container_port,
             }]
+            if health_check_grace_period_seconds is not None:
+                kwargs["healthCheckGracePeriodSeconds"] = health_check_grace_period_seconds
 
         existing_service = None
         try:
@@ -950,6 +986,16 @@ class Deployer:
         service = self.sd.get_service(Id=service_id)["Service"]
         return service["Arn"]
 
+    def _build_alb_resource_label(self, target_group_arn: str) -> str:
+        lb_arn = self.state["alb"]["arn"]
+        lb_resource = lb_arn.split(":", 5)[5]
+        tg_resource = target_group_arn.split(":", 5)[5]
+
+        if lb_resource.startswith("loadbalancer/"):
+            lb_resource = lb_resource[len("loadbalancer/") :]
+
+        return f"{lb_resource}/{tg_resource}"
+
     def configure_autoscaling_for_service(
         self,
         service_name: str,
@@ -957,6 +1003,10 @@ class Deployer:
         max_capacity: int,
         target_cpu: float = 60.0,
         target_memory: float = 70.0,
+        target_requests_per_target: Optional[float] = None,
+        target_group_arn: Optional[str] = None,
+        scale_in_cooldown: int = 120,
+        scale_out_cooldown: int = 30,
     ):
         cluster = self.state["ecs_cluster"]
         resource_id = f"service/{cluster}/{service_name}"
@@ -980,8 +1030,8 @@ class Deployer:
                 "PredefinedMetricSpecification": {
                     "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
                 },
-                "ScaleInCooldown": 120,
-                "ScaleOutCooldown": 30,
+                "ScaleInCooldown": scale_in_cooldown,
+                "ScaleOutCooldown": scale_out_cooldown,
             },
         )
 
@@ -1005,6 +1055,7 @@ class Deployer:
 
     def deploy_services(self):
         imgs = self.config["dockerhub_images"]
+        validate_docker_images(imgs)
         rds = self.state["rds"]
         alb_dns = self.state["alb"]["dns_name"]
         alb_base = f"http://{alb_dns}"
@@ -1040,6 +1091,10 @@ class Deployer:
             "UVICORN_WORKERS": str(self.config.get("api", {}).get("uvicorn_workers", 4)),
         }
         analytics_state = self.state.get("analytics", {})
+        api_cfg = self.config.get("api", {})
+        restaurant_cfg = self.config.get("restaurant_simulator", {})
+        routing_cfg = self.config.get("routing_service", {})
+        delivery_cfg = self.config.get("delivery_service", {})
         if analytics_state.get("enabled"):
             api_env.update(
                 {
@@ -1048,28 +1103,80 @@ class Deployer:
                     "KINESIS_STREAM_NAME": analytics_state["kinesis_stream_name"],
                 }
             )
-        td_api = self.register_task_definition("api", imgs["api"], 8000, api_env)
+        td_api = self.register_task_definition(
+            "api",
+            imgs["api"],
+            8000,
+            api_env,
+            cpu=api_cfg.get("cpu"),
+            memory=api_cfg.get("memory"),
+        )
 
         restaurant_simulator_env = {
             "API_URL": internal_api_base,
             "DELIVERY_SERVICE_URL": f"{alb_base}:8001",
             "REQUEST_TIMEOUT_SECONDS": "15",
             "ACCEPTANCE_RATE": "1.0",
-            "CONFIRMED_DELAY_SECONDS": "0.4",
-            "PREPARING_DELAY_SECONDS": "0.8",
+            "CONFIRMED_DELAY_SECONDS": str(
+                restaurant_cfg.get("confirmed_delay_seconds", 0.1)
+            ),
+            "PREPARING_DELAY_SECONDS": str(
+                restaurant_cfg.get("preparing_delay_seconds", 0.1)
+            ),
+            "MOVE_INTERVAL": str(restaurant_cfg.get("move_interval", 0.05)),
+            "PICKUP_WAIT_INTERVAL": str(
+                restaurant_cfg.get("pickup_wait_interval", 0.2)
+            ),
+            "DISPATCH_RETRY_INTERVAL_SECONDS": str(
+                restaurant_cfg.get("dispatch_retry_interval_seconds", 0.3)
+            ),
+            "UVICORN_WORKERS": str(
+                restaurant_cfg.get("uvicorn_workers", 2)
+            ),
         }
-        td_restaurant_simulator = self.register_task_definition("restaurant-simulator", imgs["restaurant_simulator"], 8004, restaurant_simulator_env)
+        td_restaurant_simulator = self.register_task_definition(
+            "restaurant-simulator",
+            imgs["restaurant_simulator"],
+            8004,
+            restaurant_simulator_env,
+            cpu=restaurant_cfg.get("cpu"),
+            memory=restaurant_cfg.get("memory"),
+        )
 
-        routing_env = {}
-        td_routing = self.register_task_definition("routing-service", imgs["routing_service"], 8002, routing_env)
+        routing_env = {
+            "UVICORN_WORKERS": str(
+                routing_cfg.get("uvicorn_workers", 2)
+            ),
+        }
+        td_routing = self.register_task_definition(
+            "routing-service",
+            imgs["routing_service"],
+            8002,
+            routing_env,
+            cpu=routing_cfg.get("cpu"),
+            memory=routing_cfg.get("memory"),
+        )
 
         delivery_env = {
             "API_URL": internal_api_base,
             "ROUTING_URL": f"{alb_base}:8002/rota",
             "COURIER_SIMULATOR_URL": f"{alb_base}:8004",
             "REQUEST_TIMEOUT_SECONDS": "15",
+            "ROUTING_REQUEST_TIMEOUT_SECONDS": str(
+                delivery_cfg.get("routing_request_timeout_seconds", 4)
+            ),
+            "UVICORN_WORKERS": str(
+                delivery_cfg.get("uvicorn_workers", 3)
+            ),
         }
-        td_delivery = self.register_task_definition("delivery-service", imgs["delivery_service"], 8001, delivery_env)
+        td_delivery = self.register_task_definition(
+            "delivery-service",
+            imgs["delivery_service"],
+            8001,
+            delivery_env,
+            cpu=delivery_cfg.get("cpu"),
+            memory=delivery_cfg.get("memory"),
+        )
 
         realtime_env = {
             "AWS_REGION": self.region,
@@ -1088,9 +1195,18 @@ class Deployer:
                 {
                     "REDIS_URL": redis_state["url"],
                     "REDIS_KEY_PREFIX": redis_state.get("key_prefix", "dijkfood:realtime"),
+                    "REDIS_CHANNEL_PREFIX": redis_state.get("channel_prefix", redis_state.get("key_prefix", "dijkfood:realtime")),
                     "REDIS_SNAPSHOT_TTL_SECONDS": str(redis_state.get("snapshot_ttl_seconds", 120)),
                 }
             )
+        realtime_cfg = self.config.get("realtime_metrics_service", {})
+        realtime_env.update(
+            {
+                "ENABLE_PYSPARK_DIRECT": str(realtime_cfg.get("enable_pyspark_direct", True)).lower(),
+                "PYSPARK_DIRECT_INTERVAL_SECONDS": str(realtime_cfg.get("pyspark_direct_interval_seconds", 1)),
+                "LATENCY_METRICS_PATH": realtime_cfg.get("latency_metrics_path", "/tmp/latency_metrics.jsonl"),
+            }
+        )
         redis_worker_env = dict(realtime_env)
         redis_worker_env["REDIS_WORKER_SNAPSHOT_INTERVAL_SECONDS"] = str(
             self.config.get("redis", {}).get("worker_snapshot_interval_seconds", 1)
@@ -1111,32 +1227,79 @@ class Deployer:
             8010,
             realtime_env,
         )
-        td_redis_worker = None
-        if redis_state.get("enabled") and redis_state.get("url"):
-            td_redis_worker = self.register_task_definition(
-                "redis-metrics-worker",
-                imgs["realtime_metrics_service"],
-                None,
-                redis_worker_env,
-                command=["python", "redis_metrics_worker.py"],
-            )
+        td_redis_worker = self.register_task_definition(
+            "redis-metrics-worker",
+            imgs["realtime_metrics_service"],
+            None,
+            redis_worker_env,
+            command=["python", "redis_metrics_worker.py"],
+            cpu=self.config.get("redis_metrics_worker", {}).get("cpu"),
+            memory=self.config.get("redis_metrics_worker", {}).get("memory"),
+        )
 
-        self.create_or_update_service("api", td_api, self.config["ecs"]["desired_count_api"], "api", 8000, attach_to_alb=True)
-        self.create_or_update_service("restaurant-simulator", td_restaurant_simulator, self.config["ecs"]["desired_count_restaurant_simulator"], "restaurant-simulator", 8004, attach_to_alb=True, target_group_arn=internal_tgs.get("restaurant-simulator"))
-        self.create_or_update_service("routing-service", td_routing, self.config["ecs"]["desired_count_routing_service"], "routing-service", 8002, attach_to_alb=True, target_group_arn=internal_tgs.get("routing-service"))
-        self.create_or_update_service("delivery-service", td_delivery, self.config["ecs"]["desired_count_delivery_service"], "delivery-service", 8001, attach_to_alb=True, target_group_arn=internal_tgs.get("delivery-service"))
-        self.create_or_update_service("realtime-metrics-service", td_realtime, self.config["ecs"].get("desired_count_realtime_metrics_service", 1), "realtime-metrics-service", 8010, attach_to_alb=True, target_group_arn=internal_tgs.get("realtime-metrics-service"))
-        if td_redis_worker:
-            self.create_or_update_service(
-                "redis-metrics-worker",
-                td_redis_worker,
-                self.config["ecs"].get("desired_count_redis_metrics_worker", 1),
-                "redis-metrics-worker",
-                None,
-                attach_to_alb=False,
-            )
+        self.create_or_update_service(
+            "api",
+            td_api,
+            self.config["ecs"]["desired_count_api"],
+            "api",
+            8000,
+            attach_to_alb=True,
+            health_check_grace_period_seconds=api_cfg.get("health_check_grace_period_seconds", 60),
+        )
+        self.create_or_update_service(
+            "restaurant-simulator",
+            td_restaurant_simulator,
+            self.config["ecs"]["desired_count_restaurant_simulator"],
+            "restaurant-simulator",
+            8004,
+            attach_to_alb=True,
+            target_group_arn=internal_tgs.get("restaurant-simulator"),
+            health_check_grace_period_seconds=restaurant_cfg.get("health_check_grace_period_seconds", 60),
+        )
+        self.create_or_update_service(
+            "routing-service",
+            td_routing,
+            self.config["ecs"]["desired_count_routing_service"],
+            "routing-service",
+            8002,
+            attach_to_alb=True,
+            target_group_arn=internal_tgs.get("routing-service"),
+            health_check_grace_period_seconds=routing_cfg.get("health_check_grace_period_seconds", 180),
+        )
+        self.create_or_update_service(
+            "delivery-service",
+            td_delivery,
+            self.config["ecs"]["desired_count_delivery_service"],
+            "delivery-service",
+            8001,
+            attach_to_alb=True,
+            target_group_arn=internal_tgs.get("delivery-service"),
+            health_check_grace_period_seconds=delivery_cfg.get("health_check_grace_period_seconds", 60),
+        )
+        self.create_or_update_service(
+            "realtime-metrics-service",
+            td_realtime,
+            self.config["ecs"].get("desired_count_realtime_metrics_service", 1),
+            "realtime-metrics-service",
+            8010,
+            attach_to_alb=True,
+            target_group_arn=internal_tgs.get("realtime-metrics-service"),
+            health_check_grace_period_seconds=self.config.get("realtime_metrics_service", {}).get(
+                "health_check_grace_period_seconds",
+                60,
+            ),
+        )
+        self.create_or_update_service(
+            "redis-metrics-worker",
+            td_redis_worker,
+            self.config["ecs"].get("desired_count_redis_metrics_worker", 1),
+            "redis-metrics-worker",
+            None,
+            attach_to_alb=False,
+        )
 
         autoscaling = self.config.get("autoscaling", {})
+        api_tg_arn = self.state["alb_target_group_arn"]
 
         self.configure_autoscaling_for_service(
             "api",
@@ -1144,6 +1307,10 @@ class Deployer:
             autoscaling["api"]["max"],
             autoscaling["api"]["target_cpu"],
             autoscaling["api"].get("target_memory", 70.0),
+            autoscaling["api"].get("target_requests_per_target"),
+            api_tg_arn,
+            autoscaling["api"].get("scale_in_cooldown", 120),
+            autoscaling["api"].get("scale_out_cooldown", 30),
         )
 
         self.configure_autoscaling_for_service(
@@ -1152,6 +1319,10 @@ class Deployer:
             autoscaling["restaurant_simulator"]["max"],
             autoscaling["restaurant_simulator"]["target_cpu"],
             autoscaling["restaurant_simulator"].get("target_memory", 70.0),
+            autoscaling["restaurant_simulator"].get("target_requests_per_target"),
+            internal_tgs.get("restaurant-simulator"),
+            autoscaling["restaurant_simulator"].get("scale_in_cooldown", 120),
+            autoscaling["restaurant_simulator"].get("scale_out_cooldown", 30),
         )
 
         self.configure_autoscaling_for_service(
@@ -1160,6 +1331,10 @@ class Deployer:
             autoscaling["routing_service"]["max"],
             autoscaling["routing_service"]["target_cpu"],
             autoscaling["routing_service"].get("target_memory", 70.0),
+            autoscaling["routing_service"].get("target_requests_per_target"),
+            internal_tgs.get("routing-service"),
+            autoscaling["routing_service"].get("scale_in_cooldown", 120),
+            autoscaling["routing_service"].get("scale_out_cooldown", 30),
         )
 
         self.configure_autoscaling_for_service(
@@ -1168,6 +1343,10 @@ class Deployer:
             autoscaling["delivery_service"]["max"],
             autoscaling["delivery_service"]["target_cpu"],
             autoscaling["delivery_service"].get("target_memory", 70.0),
+            autoscaling["delivery_service"].get("target_requests_per_target"),
+            internal_tgs.get("delivery-service"),
+            autoscaling["delivery_service"].get("scale_in_cooldown", 120),
+            autoscaling["delivery_service"].get("scale_out_cooldown", 30),
         )
 
         if "realtime_metrics_service" in autoscaling:
@@ -1177,14 +1356,10 @@ class Deployer:
                 autoscaling["realtime_metrics_service"]["max"],
                 autoscaling["realtime_metrics_service"]["target_cpu"],
                 autoscaling["realtime_metrics_service"].get("target_memory", 70.0),
-            )
-        if "redis_metrics_worker" in autoscaling and redis_state.get("enabled"):
-            self.configure_autoscaling_for_service(
-                "redis-metrics-worker",
-                autoscaling["redis_metrics_worker"]["min"],
-                autoscaling["redis_metrics_worker"]["max"],
-                autoscaling["redis_metrics_worker"]["target_cpu"],
-                autoscaling["redis_metrics_worker"].get("target_memory", 70.0),
+                autoscaling["realtime_metrics_service"].get("target_requests_per_target"),
+                internal_tgs.get("realtime-metrics-service"),
+                autoscaling["realtime_metrics_service"].get("scale_in_cooldown", 120),
+                autoscaling["realtime_metrics_service"].get("scale_out_cooldown", 30),
             )
     def wait_for_api(self, timeout_seconds: int = 1200):
         dns = self.state["alb"]["dns_name"]

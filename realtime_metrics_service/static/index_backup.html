@@ -139,7 +139,7 @@
 
       const producedAtMs = payload?.meta?.last_event_produced_at_ms;
       if (producedAtMs) {
-        updateLatency("event_to_dashboard_latency_ms", Date.now() - producedAtMs);
+        updateLatency("event_to_dashboard_latency_ms", Math.max(0, Date.now() - Number(producedAtMs)));
       } else {
         updateLatency("event_to_dashboard_latency_ms", 0);
       }

@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY . /app
 
+WORKDIR /app/routing_service
+
 EXPOSE 8002
 
-CMD ["uvicorn", "routing_service.app:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8002"]

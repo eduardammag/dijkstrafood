@@ -1,18 +1,21 @@
 import os
 import threading
 import time
+from collections.abc import Callable
 
 import boto3
 from botocore.exceptions import ClientError
 
 from event_parser import parse_event_bytes
+from event_parser import ParsedEvent
 from metrics_state import MetricsState
 
 
 class KinesisConsumer(threading.Thread):
-    def __init__(self, state: MetricsState):
+    def __init__(self, state: MetricsState, on_event: Callable[[ParsedEvent], None] | None = None):
         super().__init__(daemon=True)
         self.state = state
+        self.on_event = on_event
         self._stop_event = threading.Event()
 
         self.region = os.getenv("AWS_REGION", "us-east-1")
@@ -111,6 +114,8 @@ class KinesisConsumer(threading.Thread):
                 parsed_events = parse_event_bytes(raw_data)
                 for event in parsed_events:
                     self.state.apply(event)
+                    if self.on_event is not None:
+                        self.on_event(event)
 
         return any_record
 

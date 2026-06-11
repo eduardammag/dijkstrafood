@@ -22,7 +22,8 @@ Load Simulator
   -> API / Order Service
   -> Kinesis Data Stream (eventos)
   -> Realtime Metrics Service (pipeline realtime)
-  -> Redis Metrics Worker -> Redis (pipeline redis)
+  -> PySpark Direct Pipeline -> Dashboard Web (pipeline pyspark-direct)
+  -> Redis Metrics Worker -> Redis Pub/Sub (pipeline redis-pubsub)
   -> Dashboard Web (tempo real)
 ```
 
@@ -33,8 +34,9 @@ Responsabilidades:
 - `delivery_service`: serviço de sistema que escolhe entregador, calcula rotas e atribui o pedido.
 - `routing-service`: calcula rotas.
 - `realtime-metrics-service`: consome eventos do Kinesis, agrega métricas em memória e expõe API + WebSocket para dashboard.
-- `redis-metrics-worker`: consome o mesmo Kinesis em paralelo e grava snapshots no Redis/ElastiCache.
-- `redis`: armazena snapshots do pipeline Redis para comparacao de latencia no dashboard.
+- `pyspark-direct`: consome o mesmo Kinesis em paralelo, agrega a janela de eventos com PySpark e envia snapshots direto para o dashboard por WebSocket.
+- `redis-metrics-worker`: consome o mesmo Kinesis em paralelo, grava snapshots no Redis/ElastiCache e publica os snapshots por Redis Pub/Sub.
+- `redis`: armazena snapshots do pipeline Redis e atua como broker pub/sub para comparacao de latencia no dashboard.
 - `simulator`: gerador de carga/populacao.
 
 ## Dashboard em Tempo Real
@@ -49,11 +51,17 @@ Componente:
   - Mantém métricas em memória (sem DynamoDB para métricas realtime).
   - API HTTP:
     - `GET /metrics`
+    - `GET /metrics/pyspark`
+    - `GET /metrics/redis`
+    - `GET /metrics/latency`
+    - `GET /metrics/latency/recent`
     - `GET /metrics/realtime-rollup`
     - `GET /health/redis`
     - `GET /dashboard`
   - WebSocket:
     - `GET /ws`
+    - `GET /ws/pyspark`
+    - `GET /ws/redis`
 
 Indicadores implementados:
 
@@ -65,6 +73,33 @@ Indicadores implementados:
 - Total de pedidos processados
 - Latencia media de ingestao (evento -> consumer, janela de 1 minuto)
 - Latencia ponta a ponta no dashboard (evento -> browser)
+
+Comparacao dos caminhos realtime:
+
+```text
+Kinesis -> PySpark Direct Pipeline -> WebSocket -> Dashboard
+Kinesis -> Realtime Metrics Service -> WebSocket -> Dashboard
+Kinesis -> Redis Metrics Worker -> Redis Pub/Sub -> WebSocket -> Dashboard
+Kinesis -> Redis Metrics Worker -> Redis Snapshot -> Realtime Metrics Service -> WebSocket -> Dashboard
+```
+
+As rotas de comparacao sao independentes entre si: cada uma possui seu proprio caminho de entrega ate o dashboard. A dependencia comum e somente o Kinesis Data Stream como origem dos eventos.
+
+Nomes usados em `GET /metrics/latency`:
+
+- `realtime-service`: metricas sem PySpark.
+- `pyspark-direct`: metricas com PySpark.
+- `redis-pubsub`: Redis usado como broker pub/sub.
+- `redis-db`: Redis usado como banco/snapshot consultado pelo backend do dashboard.
+
+Metricas de latencia para relatorio:
+
+- `event_to_consumer_latency_ms_last`: idade do evento ao ser processado pelo consumidor do caminho.
+- `event_to_consumer_latency_ms_avg_1m`: media da janela de 1 minuto no consumidor do caminho.
+- `consumer_to_dashboard_emit_latency_ms`: tempo entre processamento do ultimo evento e emissao do snapshot pelo backend do dashboard.
+- `event_to_dashboard_emit_latency_ms`: tempo entre timestamp do evento e emissao do snapshot pelo backend do dashboard.
+
+O endpoint `GET /metrics/latency` resume media, p50, p95 e ultima amostra por pipeline. O arquivo JSONL configurado em `LATENCY_METRICS_PATH` guarda as amostras brutas para anexar ou transformar em tabela no relatorio.
 
 Observacao sobre autodeteccao de formato:
 
@@ -165,7 +200,11 @@ Variáveis de ambiente para o `realtime-metrics-service`:
 - `KINESIS_RECORDS_LIMIT` (opcional, default `500`)
 - `REDIS_URL` (opcional; local: `redis://redis:6379/0`)
 - `REDIS_KEY_PREFIX` (opcional, default `dijkfood:realtime`)
+- `REDIS_CHANNEL_PREFIX` (opcional, default `dijkfood:realtime`)
 - `REDIS_SNAPSHOT_TTL_SECONDS` (opcional, default `120`)
+- `ENABLE_PYSPARK_DIRECT` (opcional, default `true`)
+- `PYSPARK_DIRECT_INTERVAL_SECONDS` (opcional, default `1`)
+- `LATENCY_METRICS_PATH` (opcional, default `latency_metrics.jsonl`)
 
 Variáveis de ambiente adicionais no `order-service` para publicação de eventos:
 

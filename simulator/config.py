@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 import json
+import os
 
 with open("../deployment_state.json", "r") as f:
     config = json.load(f)
@@ -96,7 +97,7 @@ SCENARIOS: dict[ScenarioName, ScenarioConfig] = {
 
 DEFAULT_CONFIG = SimulatorConfig(
     api=ApiConfig(
-        base_url=config["api_url"],
+        base_url=os.getenv("API_BASE_URL", config["api_url"]),
         timeout_seconds=20.0,
     ),
     population=PopulationConfig(
@@ -127,6 +128,14 @@ DEFAULT_CONFIG = SimulatorConfig(
 
 def build_config(scenario_name: ScenarioName) -> SimulatorConfig:
     scenario = SCENARIOS[scenario_name]
+    orders_per_second = os.getenv("SIM_ORDERS_PER_SECOND")
+    duration_seconds = os.getenv("SIM_DURATION_SECONDS")
+    if orders_per_second or duration_seconds:
+        scenario = ScenarioConfig(
+            name=scenario.name,
+            orders_per_second=int(orders_per_second or scenario.orders_per_second),
+            duration_seconds=int(duration_seconds or scenario.duration_seconds),
+        )
     return SimulatorConfig(
         api=DEFAULT_CONFIG.api,
         population=DEFAULT_CONFIG.population,

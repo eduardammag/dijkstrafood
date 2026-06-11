@@ -1,0 +1,114 @@
+﻿\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{booktabs}
+\usepackage{array}
+
+\title{Relat\'orio A2 -- DijkFood\\Computa\c{c}\~ao em Nuvem}
+\author{Elisa Soares \and Maria Eduarda Mesquita \and Mariana Fernandes \and Raphaella Roma}
+\date{June 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Arquitetura}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{arquitetura-final.png}
+\caption{Arquitetura geral do DijkFood}
+\label{fig:arquitetura}
+\end{figure}
+
+O fluxo come\c{c}a no \textbf{Load Simulator}, respons\'avel por gerar carga sint\'etica para o sistema. Ele envia requisi\c{c}\~oes para a API por meio do \textbf{API Gateway}, que representa o ponto de entrada do sistema. A partir desse ponto, as chamadas chegam ao \textbf{Order Service}, servi\c{c}o central da aplica\c{c}\~ao. Esse servi\c{c}o coordena a cria\c{c}\~ao dos pedidos, consulta e atualiza dados persistentes e publica eventos de mudan\c{c}a de estado.
+
+Na camada de persist\^encia, o sistema utiliza dois tipos de armazenamento. O \textbf{RDS} armazena dados relacionais da aplica\c{c}\~ao, como pedidos, usu\'arios, restaurantes e entidades transacionais. O \textbf{DynamoDB} \'e usado para dados que se beneficiam de acesso r\'apido e escalabilidade horizontal, como localiza\c{c}\~ao ou estado operacional de entregadores. Essa separa\c{c}\~ao permite usar banco relacional onde h\'a relacionamento forte entre entidades e banco NoSQL onde h\'a necessidade de baixa lat\^encia e alto volume de leitura/escrita.
+
+O \textbf{Simulador Operacional} representa o comportamento externo do ambiente de delivery. Ele simula etapas como aceita\c{c}\~ao do pedido, preparo, despacho e entrega. Na arquitetura, ele se comunica com o Order Service para gerar mudan\c{c}as de estado e alimentar o ciclo de vida dos pedidos. Assim, o sistema consegue produzir eventos semelhantes aos de uma opera\c{c}\~ao real, mesmo sem usu\'arios humanos interagindo continuamente.
+
+Sempre que eventos relevantes ocorrem, o Order Service publica registros no \textbf{Kinesis Data Stream}. Esse componente funciona como a espinha dorsal de eventos da arquitetura. Ele desacopla a gera\c{c}\~ao dos eventos do consumo posterior, permitindo que diferentes consumidores leiam o mesmo fluxo de dados sem depender diretamente do Order Service.
+
+A partir do Kinesis, existem dois caminhos principais de observa\c{c}\~ao. O primeiro \'e o caminho de \textbf{tempo real}, no qual os eventos s\~ao consumidos por servi\c{c}os de m\'etricas e podem ser propagados para o \textbf{Redis/ElastiCache}. No ambiente local, esse componente \'e um Redis em container; na AWS, ele \'e representado pelo \textbf{Amazon ElastiCache for Redis}. Ele pode atuar tanto como banco de snapshots quanto como mecanismo de Pub/Sub, permitindo que o dashboard receba atualiza\c{c}\~oes com baixa lat\^encia, mas aqui, como fluxo final decidimos por pub-sub (o que será defendido em uma seção posterior).
+
+O segundo caminho \'e o caminho \textbf{anal\'itico}. Nele, os eventos do Kinesis s\~ao enviados para o \textbf{Kinesis Firehose}, que grava os dados no \textbf{S3}. Em seguida, o \textbf{Glue} organiza o cat\'alogo dos dados e o \textbf{Athena} permite consultas SQL sobre os eventos armazenados. Esse fluxo n\~ao tem como objetivo atualizar a interface em tempo real, mas sim permitir an\'alises hist\'oricas, agrega\c{c}\~oes por per\'iodo e relat\'orios posteriores.
+
+Por fim, o \textbf{Dashboard Frontend} consome tanto os dados de tempo real quanto os dados anal\'iticos. Para a vis\~ao operacional, ele recebe snapshots via WebSocket a partir dos servi\c{c}os de m\'etricas e do Redis/ElastiCache. Para a vis\~ao hist\'orica, ele consulta resultados agregados vindos da trilha S3, Glue e Athena. Dessa forma, a arquitetura separa claramente o que precisa de baixa lat\^encia do que pode ser processado de forma ass\'incrona e anal\'itica.
+
+\section{Gargalos}
+
+\section{Dashboard}
+\subsection{Fluxo em tempo real}
+
+A origem comum dos quatro caminhos \'e o \textit{Kinesis Data Stream}, que recebe eventos do ciclo de vida dos pedidos, como cria\c{c}\~ao, mudan\c{c}a de status, atribui\c{c}\~ao de entregador e conclus\~ao da entrega. A partir desse ponto, os caminhos s\~ao independentes entre si: cada um consome ou propaga os dados de uma forma diferente e publica snapshots para o dashboard por WebSocket.
+
+O primeiro caminho \'e o \textbf{Realtime Metrics Service sem PySpark}. Nesse fluxo, o servi\c{c}o FastAPI possui um consumidor direto do Kinesis implementado com \texttt{boto3}. O consumidor percorre os shards do stream, desserializa cada registro, identifica o formato do evento e atualiza um estado agregado em mem\'oria. Esse estado mant\'em contadores de pedidos em preparo, aguardando entregador, em entrega, entregues, entregadores dispon\'iveis e lat\^encias de ingest\~ao. A cada segundo, o backend envia o snapshot diretamente ao dashboard por WebSocket. Esse caminho tem a menor complexidade operacional, pois n\~ao depende de uma camada intermedi\'aria al\'em do pr\'oprio servi\c{c}o de m\'etricas.
+
+O segundo caminho usa \textbf{Redis como banco de snapshots}. Um worker separado tamb\'em consome o Kinesis em paralelo, calcula as mesmas m\'etricas agregadas e grava o resultado no Redis com uma chave de snapshot e tempo de expira\c{c}\~ao. O backend do dashboard consulta periodicamente esse snapshot no Redis e repassa o conte\'udo para o navegador por WebSocket. Nesse desenho, o Redis funciona como uma camada de estado compartilhado: ele desacopla o c\'alculo das m\'etricas da entrega para o dashboard e permite que m\'ultiplas inst\^ancias do backend leiam o mesmo snapshot. A desvantagem \'e que existe uma etapa extra de escrita e leitura, o que tende a adicionar lat\^encia e a exigir cuidado com TTL, consist\^encia do snapshot e frequ\^encia de atualiza\c{c}\~ao.
+
+O terceiro caminho usa \textbf{Redis como Pub/Sub}. Nesse fluxo, o worker que consome o Kinesis n\~ao apenas grava o snapshot no Redis, mas tamb\'em publica a mensagem em um canal Redis Pub/Sub. O backend do dashboard fica inscrito nesse canal e, ao receber cada publica\c{c}\~ao, encaminha o snapshot imediatamente para os clientes WebSocket. A principal diferen\c{c}a em rela\c{c}\~ao ao Redis como banco \'e o padr\~ao de comunica\c{c}\~ao: em vez de consultar uma chave periodicamente, o backend recebe uma notifica\c{c}\~ao por push. Isso reduz o custo de polling e tende a ser melhor para baixa lat\^encia, embora mensagens Pub/Sub sejam ef\^emeras: se um consumidor estiver desconectado, ele n\~ao recebe publica\c{c}\~oes antigas.
+
+O quarto caminho usa \textbf{PySpark para m\'etricas em tempo real}. Esse pipeline tamb\'em consome eventos do Kinesis, mas processa uma janela recente de eventos usando uma sess\~ao PySpark local. O objetivo \'e avaliar se uma ferramenta de processamento distribu\'ido traria vantagem para agrega\c{c}\~oes mais pesadas. Nesse caso, os eventos s\~ao convertidos para estruturas compat\'iveis com Spark, agregados por janela e transformados em snapshots enviados ao dashboard. A vantagem desse caminho aparece quando o volume de dados e a complexidade das transforma\c{c}\~oes justificam um motor distribu\'ido. Para o dashboard operacional, por\'em, existe um custo extra de inicializa\c{c}\~ao, serializa\c{c}\~ao e execu\c{c}\~ao do Spark, que pode aumentar a lat\^encia quando a agrega\c{c}\~ao \'e simples.
+
+Para comparar os caminhos, foi executada uma carga local controlada com 5 pedidos por segundo durante 60 segundos, totalizando 300 tentativas de pedido. O sistema aceitou 246 pedidos e concluiu 71 entregas durante a execu\c{c}\~ao observada. A m\'etrica principal da compara\c{c}\~ao foi \texttt{event\_\allowbreak to\_\allowbreak dashboard\_\allowbreak emit\_\allowbreak latency\_\allowbreak ms}, que mede o intervalo entre o timestamp do evento original e o momento em que o backend emite o snapshot para o dashboard. Portanto, os valores refletem o tempo fim a fim entre o evento publicado no fluxo e a emiss\~ao da atualiza\c{c}\~ao visual, e n\~ao apenas o tempo de processamento interno de cada componente.
+
+Nas tabelas, a coluna \textbf{amostras} representa a quantidade de medi\c{c}\~oes de lat\^encia coletadas para cada caminho a partir dos snapshots emitidos pelo backend; ela n\~ao representa diretamente a quantidade de pedidos criados. A coluna \textbf{m\'edia} representa a lat\^encia m\'edia dessas amostras. A coluna \textbf{p50} representa o percentil 50, ou seja, metade das medi\c{c}\~oes teve lat\^encia menor ou igual \`aquele valor. A coluna \textbf{p95} representa o percentil 95, isto \'e, 95\% das medi\c{c}\~oes ficaram abaixo daquele valor. Em sistemas de tempo real, o p95 \'e importante porque mostra o comportamento da cauda da distribui\c{c}\~ao, indicando se uma parte dos usu\'arios recebe atualiza\c{c}\~oes muito atrasadas mesmo quando a m\'edia parece aceit\'avel.
+
+\begin{table}[h]
+\centering
+\caption{Comparativo de lat\^encia dos caminhos em tempo real}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Caminho} & \textbf{Amostras} & \textbf{M\'edia (ms)} & \textbf{p50 (ms)} & \textbf{p95 (ms)} \\
+\midrule
+Redis Pub/Sub & 70 & 118989.07 & 123219.27 & 228505.18 \\
+M\'etricas sem PySpark & 239 & 119733.29 & 121270.85 & 228705.20 \\
+Redis como banco & 241 & 121745.13 & 122281.85 & 232628.65 \\
+PySpark & 125 & 157953.02 & 168975.24 & 235299.65 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+Al\'em da medi\c{c}\~ao executada no cen\'ario normal controlado, tamb\'em foram executados os cen\'arios \textit{teste}, \textit{pico} e \textit{especial}. O cen\'ario \textit{teste} usou 1 pedido por segundo durante 1 segundo, apenas para validar o funcionamento dos caminhos. O cen\'ario \textit{normal} usou 5 pedidos por segundo durante 60 segundos. O cen\'ario \textit{pico} usou 50 pedidos por segundo durante 60 segundos. O cen\'ario \textit{especial} usou 200 pedidos por segundo durante 60 segundos, for\c{c}ando uma carga muito acima do uso normal. A Tabela 2 organiza os dados por cen\'ario e por caminho. Todos os valores correspondem a medi\c{c}\~oes reais coletadas no ambiente local de teste a partir dos snapshots emitidos pelo backend para o dashboard.
+
+\begin{table}[h]
+\centering
+\caption{Lat\^encia por cen\'ario e por caminho}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Cen\'ario} & \textbf{Caminho} & \textbf{Amostras} & \textbf{M\'edia (ms)} & \textbf{p50 (ms)} & \textbf{p95 (ms)} \\
+\midrule
+\textit{teste} & Redis Pub/Sub & 8 & 12780.11 & 13678.33 & 23628.91 \\
+\textit{teste} & M\'etricas sem PySpark & 27 & 11651.94 & 11205.32 & 24864.33 \\
+\textit{teste} & Redis como banco & 27 & 11734.24 & 11224.58 & 24872.66 \\
+\textit{teste} & PySpark & 1 & 26148.91 & 26148.91 & 26148.91 \\
+\addlinespace
+\textit{normal} & Redis Pub/Sub & 70 & 118989.07 & 123219.27 & 228505.18 \\
+\textit{normal} & M\'etricas sem PySpark & 239 & 119733.29 & 121270.85 & 228705.20 \\
+\textit{normal} & Redis como banco & 241 & 121745.13 & 122281.85 & 232628.65 \\
+\textit{normal} & PySpark & 125 & 157953.02 & 168975.24 & 235299.65 \\
+\addlinespace
+\textit{pico} & Redis Pub/Sub & 79 & 62063.90 & 57565.62 & 118349.94 \\
+\textit{pico} & M\'etricas sem PySpark & 235 & 66856.63 & 66567.53 & 121569.00 \\
+\textit{pico} & Redis como banco & 240 & 65832.00 & 65226.06 & 121585.82 \\
+\textit{pico} & PySpark & 103 & 105158.38 & 105378.94 & 128154.65 \\
+\addlinespace
+\textit{especial} & Redis Pub/Sub & 62 & 42553.02 & 30278.70 & 105346.88 \\
+\textit{especial} & M\'etricas sem PySpark & 177 & 46657.66 & 32899.31 & 110848.19 \\
+\textit{especial} & Redis como banco & 174 & 47441.14 & 33484.90 & 111002.65 \\
+\textit{especial} & PySpark & 75 & 78862.50 & 83507.69 & 116825.22 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+A leitura dos cen\'arios mostra que o Redis Pub/Sub se manteve competitivo conforme a carga aumentou. No cen\'ario \textit{teste}, a diferen\c{c}a entre os caminhos simples foi pequena, e o PySpark teve poucas amostras v\'alidas porque sua inicializa\c{c}\~ao e seu custo de processamento s\~ao altos para uma carga t\~ao curta. No cen\'ario \textit{normal}, o Redis Pub/Sub apresentou a menor lat\^encia m\'edia, enquanto o caminho sem PySpark apresentou p50 ligeiramente menor. Nos cen\'arios \textit{pico} e \textit{especial}, a API local saturou antes do dashboard, criando backlog e elevando as lat\^encias absolutas. Mesmo assim, o Redis Pub/Sub apresentou a menor lat\^encia m\'edia entre os quatro caminhos nesses cen\'arios de maior carga. Isso refor\c{c}a sua escolha como caminho principal para atualiza\c{c}\~oes visuais em tempo real.
+
+Os resultados mostram que os tr\^es caminhos mais simples ficaram pr\'oximos entre si, enquanto o caminho com PySpark apresentou maior lat\^encia m\'edia e maior p50. Isso \'e esperado neste cen\'ario, pois as m\'etricas do dashboard s\~ao agrega\c{c}\~oes simples e incrementais. Para esse tipo de processamento, manter estado em mem\'oria ou publicar snapshots via Redis \'e mais eficiente do que acionar um motor distribu\'ido.
+
+Considerando baixa lat\^encia relativa, escalabilidade e simplicidade operacional, o caminho escolhido para o projeto foi o \textbf{Redis como Pub/Sub}. Ele separa o worker de c\'alculo do backend, permite escalar inst\^ancias do dashboard inscritas no canal, evita polling constante no Redis e apresentou o melhor comportamento m\'edio no conjunto dos cen\'arios avaliados. Para evitar duplicidade de snapshots, o worker respons\'avel por consumir o Kinesis deve ser coordenado quando houver mais de uma inst\^ancia desse consumidor. O caminho sem PySpark tamb\'em \'e competitivo em lat\^encia, mas fica mais acoplado a uma inst\^ancia do servi\c{c}o de m\'etricas. O Redis como banco \'e \'util como fallback e para consulta do \'ultimo snapshot, especialmente porque o Pub/Sub n\~ao preserva mensagens antigas para consumidores desconectados, mas n\~ao deve ser o caminho principal de atualiza\c{c}\~ao em tempo real. O PySpark fica reservado para um cen\'ario anal\'itico ou para transforma\c{c}\~oes muito mais pesadas, n\~ao para o fluxo principal do dashboard operacional.
+\subsection{Fluxo anal\'itico}
+
+\end{document}
