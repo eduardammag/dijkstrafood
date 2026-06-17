@@ -226,3 +226,9 @@ Os arquivos `config.json`, `config_req.json` e `config.json.example` agora supor
 - `autoscaling.redis_metrics_worker`
 
 O `deploy.py` cria automaticamente o stream Kinesis, o Redis/ElastiCache, o worker Kinesis -> Redis e publica o endpoint do dashboard em `http://<alb>:8010/dashboard`.
+
+Cada servico em `autoscaling` agora aceita:
+
+- `target_cpu` e `target_memory` no formato legado
+- `target_requests_per_target` para criar policy `ALBRequestCountPerTarget` automaticamente em servicos HTTP atras do ALB
+- `policies` para declarar policies adicionais ou sobrescrever as padrao, por exemplo `cpu`, `memory` e `ALBRequestCountPerTarget`

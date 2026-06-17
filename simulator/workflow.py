@@ -7,6 +7,11 @@ from config import SimulatorConfig
 from data_generator import build_order_items_for_restaurant
 from models import RequestResult, Restaurant, User
 
+INITIAL_STATUS_POLL_DELAY_SECONDS = 2.0
+BACKGROUND_STATUS_POLL_SECONDS = 8.0
+ACTIVE_STATUS_POLL_SECONDS = 3.0
+STATUS_POLL_CONCURRENCY = 120
+
 
 @dataclass
 class WorkflowContext:
@@ -35,31 +40,47 @@ class OrderWorkflow:
         self.api_client = api_client
         self.config = config
         self.metrics_callback = metrics_callback
+        self._status_poll_semaphore = asyncio.Semaphore(STATUS_POLL_CONCURRENCY)
 
     def _record(self, endpoint_name: str, result: RequestResult) -> None:
         if self.metrics_callback is not None:
             self.metrics_callback(endpoint_name, result)
 
-    async def _observe_order(self, order_id: int) -> tuple[list[RequestResult], Optional[str], Optional[list]]:
+    @staticmethod
+    def _next_poll_delay(final_status: Optional[str], status_code: int) -> float:
+        if status_code == 404:
+            return ACTIVE_STATUS_POLL_SECONDS
+        if final_status in {"READY_FOR_PICKUP", "PICKED_UP", "IN_TRANSIT"}:
+            return ACTIVE_STATUS_POLL_SECONDS
+        return BACKGROUND_STATUS_POLL_SECONDS
+
+    async def _observe_order(
+        self,
+        order_id: int,
+    ) -> tuple[list[RequestResult], Optional[str], Optional[list], Optional[str]]:
         order_results: list[RequestResult] = []
         final_status: Optional[str] = None
         observed_events: Optional[list] = None
 
-        max_attempts = 60
-        interval_seconds = 3.0
-        consecutive_404 = 0
+        await asyncio.sleep(INITIAL_STATUS_POLL_DELAY_SECONDS)
 
-        for _ in range(max_attempts):
-            order_result = await self.api_client.get_order_status(order_id)
+        while True:
+            async with self._status_poll_semaphore:
+                order_result = await self.api_client.get_order_status(order_id)
             self._record("GET /orders/{id}", order_result)
             order_results.append(order_result)
 
             if order_result.status_code == 404:
-                consecutive_404 += 1
-                await asyncio.sleep(interval_seconds)
+                await asyncio.sleep(self._next_poll_delay(final_status, order_result.status_code))
                 continue
 
-            consecutive_404 = 0
+            if not order_result.success:
+                return (
+                    order_results,
+                    final_status,
+                    observed_events,
+                    f"order_query_failed_status={order_result.status_code}",
+                )
 
             if order_result.success and order_result.response_json:
                 response_data = order_result.response_json
@@ -71,9 +92,9 @@ class OrderWorkflow:
                 if final_status == "DELIVERED":
                     break
 
-            await asyncio.sleep(interval_seconds)
+            await asyncio.sleep(self._next_poll_delay(final_status, order_result.status_code))
 
-        return order_results, final_status, observed_events
+        return order_results, final_status, observed_events, None
 
     async def run(self, context: WorkflowContext) -> WorkflowResult:
         items = build_order_items_for_restaurant(context.restaurant.cuisine_type)
@@ -113,29 +134,15 @@ class OrderWorkflow:
                 error="missing_order_id",
             )
 
-        order_queries, final_status, observed_events = await self._observe_order(order_id)
-
-        query_statuses = [q.status_code for q in order_queries]
-        has_404 = any(code == 404 for code in query_statuses)
-        has_other_errors = any((not q.success) and q.status_code != 404 for q in order_queries)
+        order_queries, final_status, observed_events, observe_error = await self._observe_order(order_id)
         delivered = final_status == "DELIVERED"
 
-        success = delivered and not has_other_errors and not has_404
-
-        error = None
-        if has_404:
-            error = "order_not_visible_after_creation"
-        elif has_other_errors:
-            error = "order_query_errors"
-        elif not delivered:
-            error = f"order_not_delivered_last_status={final_status}"
-
         return WorkflowResult(
-            success=success,
+            success=delivered,
             order_id=order_id,
             created_order=create_order_result,
             order_queries=order_queries,
             final_status=final_status,
             observed_events=observed_events,
-            error=error,
+            error=observe_error,
         )

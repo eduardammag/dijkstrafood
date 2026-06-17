@@ -63,26 +63,26 @@ class SimulatorConfig:
 
 TESTE_SCENARIO = ScenarioConfig(
     name="teste",
-    orders_per_second=1,
-    duration_seconds=10,
+    orders_per_second=10,
+    duration_seconds=1,
 )
 
 NORMAL_SCENARIO = ScenarioConfig(
     name="normal",
     orders_per_second=10,
-    duration_seconds=30,
+    duration_seconds=120,
 )
 
 PEAK_SCENARIO = ScenarioConfig(
     name="peak",
     orders_per_second=50,
-    duration_seconds=60,
+    duration_seconds=120,
 )
 
 SPECIAL_SCENARIO = ScenarioConfig(
     name="special",
     orders_per_second=200,
-    duration_seconds=60,
+    duration_seconds=120,
 )
 
 

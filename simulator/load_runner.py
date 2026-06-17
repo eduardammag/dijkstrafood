@@ -1,13 +1,15 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from client import ApiClient
 from config import SimulatorConfig
 from metrics import MetricsCollector
 from models import Restaurant, User
 from workflow import OrderWorkflow, WorkflowContext, WorkflowResult
+
+REPORT_SETTLE_SECONDS = 15.0
 
 
 @dataclass
@@ -23,6 +25,11 @@ class LoadTestResult:
     emission_elapsed_seconds: float
     end_to_end_elapsed_seconds: float
     failure_examples: List[str]
+    stopped_early: bool
+    stop_reason: Optional[str]
+    planned_duration_seconds: int
+    planned_expected_orders: int
+    report_settle_seconds: float
 
     @property
     def configured_throughput(self) -> float:
@@ -79,26 +86,54 @@ class LoadRunner:
         context = WorkflowContext(customer=client, restaurant=restaurant)
         return await self.workflow.run(context)
 
+    @staticmethod
+    def _collect_finished_results(done_tasks: set[asyncio.Task], results: List[Any]) -> None:
+        for task in done_tasks:
+            try:
+                results.append(task.result())
+            except Exception as exc:
+                results.append(exc)
+
     async def run(self) -> LoadTestResult:
         scenario = self.config.scenario
         orders_per_second = scenario.orders_per_second
         duration_seconds = scenario.duration_seconds
-        expected_orders = orders_per_second * duration_seconds
+        planned_expected_orders = orders_per_second * duration_seconds
 
-        tasks: List[asyncio.Task] = []
+        pending_tasks: set[asyncio.Task] = set()
+        results: List[Any] = []
         start = time.perf_counter()
+        stop_reason: Optional[str] = None
 
         for _ in range(duration_seconds):
             second_start = time.perf_counter()
 
             for _ in range(orders_per_second):
-                tasks.append(asyncio.create_task(self._run_single_order()))
+                pending_tasks.add(asyncio.create_task(self._run_single_order()))
 
-            elapsed_in_second = time.perf_counter() - second_start
-            await asyncio.sleep(max(0.0, 1.0 - elapsed_in_second))
+            remaining_in_second = max(0.0, 1.0 - (time.perf_counter() - second_start))
+            if pending_tasks:
+                done_tasks, pending_tasks = await asyncio.wait(
+                    pending_tasks,
+                    timeout=remaining_in_second,
+                )
+                self._collect_finished_results(done_tasks, results)
+            elif remaining_in_second > 0:
+                await asyncio.sleep(remaining_in_second)
+
+            if not pending_tasks:
+                stop_reason = "all_emitted_orders_reached_terminal_state"
+                break
 
         emission_elapsed_seconds = time.perf_counter() - start
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        if pending_tasks:
+            done_tasks, _ = await asyncio.wait(pending_tasks)
+            self._collect_finished_results(done_tasks, results)
+
+        if results:
+            await asyncio.sleep(REPORT_SETTLE_SECONDS)
+
         end_to_end_elapsed_seconds = time.perf_counter() - start
 
         accepted_orders = 0
@@ -127,14 +162,19 @@ class LoadRunner:
             scenario_name=scenario.name,
             configured_orders_per_second=orders_per_second,
             duration_seconds=duration_seconds,
-            expected_orders=expected_orders,
-            attempted_orders=len(tasks),
+            expected_orders=len(results),
+            attempted_orders=len(results),
             accepted_orders=accepted_orders,
             delivered_orders=delivered_orders,
             failed_orders=failed_orders,
             emission_elapsed_seconds=emission_elapsed_seconds,
             end_to_end_elapsed_seconds=end_to_end_elapsed_seconds,
             failure_examples=failure_examples,
+            stopped_early=stop_reason is not None,
+            stop_reason=stop_reason,
+            planned_duration_seconds=duration_seconds,
+            planned_expected_orders=planned_expected_orders,
+            report_settle_seconds=REPORT_SETTLE_SECONDS,
         )
 
     def _describe_failure(self, result: WorkflowResult) -> str:

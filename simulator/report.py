@@ -17,6 +17,8 @@ def export_json_report(result: LoadTestResult, metrics: MetricsCollector, output
             "orders_per_second": result.configured_orders_per_second,
             "duration_seconds": result.duration_seconds,
             "expected_orders": result.expected_orders,
+            "planned_duration_seconds": result.planned_duration_seconds,
+            "planned_expected_orders": result.planned_expected_orders,
             "attempted_orders": result.attempted_orders,
             "accepted_orders": result.accepted_orders,
             "delivered_orders": result.delivered_orders,
@@ -25,6 +27,9 @@ def export_json_report(result: LoadTestResult, metrics: MetricsCollector, output
             "delivered_throughput": result.delivered_throughput,
             "emission_elapsed_seconds": result.emission_elapsed_seconds,
             "end_to_end_elapsed_seconds": result.end_to_end_elapsed_seconds,
+            "stopped_early": result.stopped_early,
+            "stop_reason": result.stop_reason,
+            "report_settle_seconds": result.report_settle_seconds,
         },
         "endpoints": {},
     }
@@ -50,7 +55,14 @@ def print_load_test_summary(result: LoadTestResult):
     print("\n===== LOAD TEST SUMMARY =====")
     print(f"Scenario: {result.scenario_name}")
     print(f"Configured Orders/s: {result.configured_orders_per_second}")
-    print(f"Duration (s): {result.duration_seconds}")
+    print(f"Configured Duration (s): {result.planned_duration_seconds}")
+    print(f"Actual Emission Time (s): {result.emission_elapsed_seconds:.2f}")
+    print(f"End-to-End Time (s): {result.end_to_end_elapsed_seconds:.2f}")
+    print(f"Report Settle Wait (s): {result.report_settle_seconds:.2f}")
+    print(f"Stopped Early: {'yes' if result.stopped_early else 'no'}")
+    if result.stop_reason:
+        print(f"Stop Reason: {result.stop_reason}")
+    print(f"Planned Orders: {result.planned_expected_orders}")
     print(f"Expected Orders: {result.expected_orders}")
     print(f"Attempted Orders: {result.attempted_orders}")
     print(f"Accepted Orders: {result.accepted_orders}")

@@ -1,7 +1,7 @@
 import os
 import json
-import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from psycopg2.pool import ThreadedConnectionPool
 
 load_dotenv()
 
@@ -39,6 +40,11 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))
 NOTIFY_TIMEOUT_SECONDS = float(os.getenv("NOTIFY_TIMEOUT_SECONDS", "2"))
 NOTIFY_MAX_ATTEMPTS = int(os.getenv("NOTIFY_MAX_ATTEMPTS", "3"))
 NOTIFY_RETRY_BACKOFF_SECONDS = float(os.getenv("NOTIFY_RETRY_BACKOFF_SECONDS", "0.2"))
+NOTIFICATION_WORKERS = int(os.getenv("NOTIFICATION_WORKERS", "64"))
+EVENT_DISPATCH_WORKERS = int(os.getenv("EVENT_DISPATCH_WORKERS", "32"))
+ANALYTICS_DISPATCH_WORKERS = int(os.getenv("ANALYTICS_DISPATCH_WORKERS", "32"))
+DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
+DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "8"))
 
 KINESIS_STREAM_NAME = os.getenv("KINESIS_STREAM_NAME", "").strip()
 KINESIS_ENDPOINT_URL = os.getenv("KINESIS_ENDPOINT_URL", "").strip() or None
@@ -53,6 +59,38 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 realtime_table = None
 kinesis_client = None
 analytics_stream = None
+db_pool: ThreadedConnectionPool | None = None
+notification_executor = ThreadPoolExecutor(max_workers=NOTIFICATION_WORKERS, thread_name_prefix="restaurant-notify")
+event_dispatch_executor = ThreadPoolExecutor(max_workers=EVENT_DISPATCH_WORKERS, thread_name_prefix="kinesis-dispatch")
+analytics_dispatch_executor = ThreadPoolExecutor(max_workers=ANALYTICS_DISPATCH_WORKERS, thread_name_prefix="analytics-dispatch")
+
+
+class PooledConnectionProxy:
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_released", False)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_conn", "_released"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._conn, name, value)
+
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._conn.__exit__(exc_type, exc, tb)
+
+    def close(self):
+        if self._released:
+            return
+        release_connection(self._conn)
+        object.__setattr__(self, "_released", True)
 
 
 class Item(BaseModel):
@@ -103,6 +141,11 @@ class AssignCourierRequest(BaseModel):
     courier_id: int
     route_to_pickup: Optional[list] = None
     route_to_delivery: Optional[list] = None
+
+
+class ReleaseCourierRequest(BaseModel):
+    courier_id: int
+    reason: Optional[str] = None
 
 
 def init_dynamo():
@@ -174,7 +217,7 @@ def publish_kinesis_event(payload: dict):
 
 
 def dispatch_kinesis_event_async(payload: dict):
-    threading.Thread(target=publish_kinesis_event, args=(payload,), daemon=True).start()
+    event_dispatch_executor.submit(publish_kinesis_event, payload)
 
 
 def utc_now_iso() -> str:
@@ -229,8 +272,15 @@ def init_analytics_stream():
     print(f"Analytics stream configured: {KINESIS_STREAM_NAME}")
 
 
-def get_connection():
-    return psycopg2.connect(
+def init_db_pool():
+    global db_pool
+
+    if db_pool is not None:
+        return
+
+    db_pool = ThreadedConnectionPool(
+        minconn=DB_POOL_MIN_CONN,
+        maxconn=DB_POOL_MAX_CONN,
         host=DB_HOST,
         database=DB_NAME,
         user=DB_USER,
@@ -239,6 +289,30 @@ def get_connection():
         sslmode=DB_SSLMODE,
         connect_timeout=5,
     )
+
+
+def get_connection():
+    init_db_pool()
+    if db_pool is None:
+        raise RuntimeError("Database connection pool not initialized")
+    return PooledConnectionProxy(db_pool.getconn())
+
+
+def release_connection(conn, close: bool = False):
+    if conn is None:
+        return
+
+    if db_pool is None:
+        conn.close()
+        return
+
+    try:
+        if not conn.closed:
+            conn.rollback()
+    except Exception:
+        close = True
+
+    db_pool.putconn(conn, close=close)
 
 
 def check_db_connection() -> tuple[bool, str]:
@@ -250,7 +324,7 @@ def check_db_connection() -> tuple[bool, str]:
         return False, str(exc)
     finally:
         if conn is not None:
-            conn.close()
+            release_connection(conn)
 
 
 def init_db():
@@ -324,7 +398,7 @@ def init_db():
         raise
     finally:
         if conn is not None:
-            conn.close()
+            release_connection(conn)
 
 
 def normalize_status(raw_status: str) -> str:
@@ -419,7 +493,7 @@ def insert_order_event(
     )
 
 
-def publish_order_event(event: dict):
+def _publish_order_event_sync(event: dict):
     if not ANALYTICS_ENABLED or analytics_stream is None:
         return
 
@@ -431,6 +505,10 @@ def publish_order_event(event: dict):
         )
     except Exception as exc:
         print(f"Analytics event publish failed: {exc}")
+
+
+def publish_order_event(event: dict):
+    analytics_dispatch_executor.submit(_publish_order_event_sync, event)
 
 
 def notify_restaurant_simulator(order_id: int, restaurant_id: int, client_id: int):
@@ -465,17 +543,19 @@ def notify_restaurant_simulator_with_retry(order_id: int, restaurant_id: int, cl
 
 
 def dispatch_restaurant_notification_async(order_id: int, restaurant_id: int, client_id: int):
-    threading.Thread(
-        target=notify_restaurant_simulator_with_retry,
-        args=(order_id, restaurant_id, client_id),
-        daemon=True,
-    ).start()
+    notification_executor.submit(
+        notify_restaurant_simulator_with_retry,
+        order_id,
+        restaurant_id,
+        client_id,
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Starting API application")
 
+    init_db_pool()
     init_dynamo()
     init_kinesis()
     init_analytics_stream()
@@ -488,6 +568,11 @@ async def lifespan(app: FastAPI):
     yield
 
     print("Shutting down API application")
+    if db_pool is not None:
+        db_pool.closeall()
+    notification_executor.shutdown(wait=False, cancel_futures=True)
+    event_dispatch_executor.shutdown(wait=False, cancel_futures=True)
+    analytics_dispatch_executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -1090,6 +1175,76 @@ def assign_courier(order_id: int, body: AssignCourierRequest):
 
         return {
             "message": "Courier assigned",
+            "order_id": order_id,
+            "courier_id": body.courier_id,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if conn is not None:
+            release_connection(conn)
+
+
+@app.post("/orders/{order_id}/release-courier")
+def release_courier(order_id: int, body: ReleaseCourierRequest):
+    conn = None
+    try:
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT courier_id, order_status FROM orders WHERE order_id = %s",
+                    (order_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Order not found")
+
+                current_courier_id, current_status = row
+                if current_courier_id is None:
+                    return {
+                        "message": "Order has no courier assigned",
+                        "order_id": order_id,
+                        "courier_id": None,
+                    }
+
+                if int(current_courier_id) != int(body.courier_id):
+                    raise HTTPException(status_code=409, detail="Order assigned to another courier")
+
+                if str(current_status).upper() == "DELIVERED":
+                    return {
+                        "message": "Order already delivered",
+                        "order_id": order_id,
+                        "courier_id": current_courier_id,
+                    }
+
+                cur.execute(
+                    "UPDATE couriers SET is_available = TRUE WHERE user_id = %s",
+                    (body.courier_id,),
+                )
+                cur.execute(
+                    "UPDATE orders SET courier_id = NULL WHERE order_id = %s",
+                    (order_id,),
+                )
+                insert_order_event(
+                    cur=cur,
+                    order_id=order_id,
+                    event_type="COURIER_RELEASED",
+                    from_status=None,
+                    to_status=None,
+                    event_message=(
+                        f"Courier {body.courier_id} released"
+                        + (f": {body.reason}" if body.reason else "")
+                    ),
+                )
+
+        return {
+            "message": "Courier released",
             "order_id": order_id,
             "courier_id": body.courier_id,
         }

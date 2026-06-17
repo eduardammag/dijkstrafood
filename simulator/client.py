@@ -16,7 +16,16 @@ class ApiClient:
     async def __aenter__(self):
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=self.timeout,
+            timeout=httpx.Timeout(
+                connect=min(5.0, self.timeout),
+                read=self.timeout,
+                write=self.timeout,
+                pool=5.0,
+            ),
+            limits=httpx.Limits(
+                max_connections=400,
+                max_keepalive_connections=200,
+            ),
             trust_env=False,
         )
         return self
@@ -48,6 +57,16 @@ class ApiClient:
                 status_code=response.status_code,
                 response_json=parsed_json,
                 error=None if response.is_success else response.text,
+            )
+
+        except httpx.TimeoutException as e:
+            latency = (time.perf_counter() - start) * 1000
+            return RequestResult(
+                success=False,
+                latency_ms=latency,
+                status_code=0,
+                response_json=None,
+                error=f"{type(e).__name__}: {e}",
             )
 
         except Exception as e:

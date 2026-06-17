@@ -3,7 +3,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import subprocess
 import requests
 
@@ -90,6 +90,122 @@ class Deployer:
         cpu = str(service_cfg.get("cpu", self.config["ecs"]["cpu"]))
         memory = str(service_cfg.get("memory", self.config["ecs"]["memory"]))
         return cpu, memory
+
+    def _resource_label_for_target_group(self, target_group_arn: str) -> str:
+        lb_arn = self.state["alb"]["arn"]
+        lb_suffix = lb_arn.split("loadbalancer/", 1)[1]
+        tg_suffix = target_group_arn.split("targetgroup/", 1)[1]
+        return f"{lb_suffix}/targetgroup/{tg_suffix}"
+
+    def _target_group_arn_for_service(self, service_name: str) -> Optional[str]:
+        if service_name == "api":
+            return self.state.get("alb_target_group_arn")
+        return self.state.get("internal_target_groups", {}).get(service_name)
+
+    def _normalize_scaling_policy(
+        self,
+        *,
+        service_name: str,
+        policy_name: str,
+        policy_cfg: Any,
+        fallback_metric: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if policy_cfg is None or policy_cfg is False:
+            return None
+
+        if isinstance(policy_cfg, (int, float)):
+            policy_cfg = {"target_value": float(policy_cfg)}
+        elif not isinstance(policy_cfg, dict):
+            raise ValueError(f"Autoscaling invalido para {service_name}.{policy_name}: {policy_cfg!r}")
+
+        if policy_cfg.get("enabled", True) is False:
+            return None
+
+        metric_type = (
+            policy_cfg.get("type")
+            or fallback_metric
+            or policy_name
+        )
+        aliases = {
+            "cpu": "ECSServiceAverageCPUUtilization",
+            "memory": "ECSServiceAverageMemoryUtilization",
+            "requests_per_target": "ALBRequestCountPerTarget",
+            "alb_request_count_per_target": "ALBRequestCountPerTarget",
+        }
+        metric_type = aliases.get(str(metric_type).lower(), metric_type)
+
+        target_value = policy_cfg.get("target_value", policy_cfg.get("target"))
+        if target_value is None:
+            raise ValueError(f"Autoscaling {service_name}.{policy_name} sem target_value")
+
+        normalized: Dict[str, Any] = {
+            "name": policy_cfg.get("name") or policy_name,
+            "metric_type": metric_type,
+            "target_value": float(target_value),
+            "scale_in_cooldown": int(policy_cfg.get("scale_in_cooldown", 120)),
+            "scale_out_cooldown": int(policy_cfg.get("scale_out_cooldown", 30)),
+        }
+        if "disable_scale_in" in policy_cfg:
+            normalized["disable_scale_in"] = bool(policy_cfg["disable_scale_in"])
+
+        if metric_type == "ALBRequestCountPerTarget":
+            target_group_arn = policy_cfg.get("target_group_arn") or self._target_group_arn_for_service(service_name)
+            if not target_group_arn:
+                log(f"Pulando policy {policy_name} de {service_name}: servico sem target group no ALB")
+                return None
+            normalized["resource_label"] = (
+                policy_cfg.get("resource_label")
+                or self._resource_label_for_target_group(target_group_arn)
+            )
+
+        return normalized
+
+    def _autoscaling_policies_for_service(self, service_name: str, service_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        policies: List[Dict[str, Any]] = []
+
+        legacy_policies = [
+            ("cpu", service_cfg.get("target_cpu"), "cpu"),
+            ("memory", service_cfg.get("target_memory"), "memory"),
+            (
+                "requests-per-target",
+                service_cfg.get("target_requests_per_target", service_cfg.get("requests_per_target")),
+                "ALBRequestCountPerTarget",
+            ),
+        ]
+        for policy_name, policy_cfg, fallback_metric in legacy_policies:
+            normalized = self._normalize_scaling_policy(
+                service_name=service_name,
+                policy_name=policy_name,
+                policy_cfg=policy_cfg,
+                fallback_metric=fallback_metric,
+            )
+            if normalized:
+                policies.append(normalized)
+
+        explicit_policies = service_cfg.get("policies", {})
+        if isinstance(explicit_policies, list):
+            for index, policy_cfg in enumerate(explicit_policies, start=1):
+                normalized = self._normalize_scaling_policy(
+                    service_name=service_name,
+                    policy_name=f"policy-{index}",
+                    policy_cfg=policy_cfg,
+                )
+                if normalized:
+                    policies.append(normalized)
+        elif isinstance(explicit_policies, dict):
+            for policy_name, policy_cfg in explicit_policies.items():
+                normalized = self._normalize_scaling_policy(
+                    service_name=service_name,
+                    policy_name=policy_name,
+                    policy_cfg=policy_cfg,
+                )
+                if normalized:
+                    policies.append(normalized)
+
+        deduped: Dict[str, Dict[str, Any]] = {}
+        for policy in policies:
+            deduped[policy["name"]] = policy
+        return list(deduped.values())
 
     def save_state(self):
         STATE_FILE.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
@@ -963,13 +1079,12 @@ class Deployer:
     def configure_autoscaling_for_service(
         self,
         service_name: str,
-        min_capacity: int,
-        max_capacity: int,
-        target_cpu: float = 60.0,
-        target_memory: float = 70.0,
+        service_cfg: Dict[str, Any],
     ):
         cluster = self.state["ecs_cluster"]
         resource_id = f"service/{cluster}/{service_name}"
+        min_capacity = int(service_cfg["min"])
+        max_capacity = int(service_cfg["max"])
 
         self.application_autoscaling.register_scalable_target(
             ServiceNamespace="ecs",
@@ -979,39 +1094,35 @@ class Deployer:
             MaxCapacity=max_capacity,
         )
 
-        self.application_autoscaling.put_scaling_policy(
-            PolicyName=f"{self.project}-{service_name}-cpu-target",
-            ServiceNamespace="ecs",
-            ResourceId=resource_id,
-            ScalableDimension="ecs:service:DesiredCount",
-            PolicyType="TargetTrackingScaling",
-            TargetTrackingScalingPolicyConfiguration={
-                "TargetValue": target_cpu,
-                "PredefinedMetricSpecification": {
-                    "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
-                },
-                "ScaleInCooldown": 120,
-                "ScaleOutCooldown": 30,
-            },
-        )
+        policies = self._autoscaling_policies_for_service(service_name, service_cfg)
+        if not policies:
+            log(f"Nenhuma policy de autoscaling configurada para {service_name}")
+            return
 
-        self.application_autoscaling.put_scaling_policy(
-            PolicyName=f"{self.project}-{service_name}-memory-target",
-            ServiceNamespace="ecs",
-            ResourceId=resource_id,
-            ScalableDimension="ecs:service:DesiredCount",
-            PolicyType="TargetTrackingScaling",
-            TargetTrackingScalingPolicyConfiguration={
-                "TargetValue": target_memory,
+        for policy in policies:
+            policy_configuration: Dict[str, Any] = {
+                "TargetValue": policy["target_value"],
+                "ScaleInCooldown": policy["scale_in_cooldown"],
+                "ScaleOutCooldown": policy["scale_out_cooldown"],
                 "PredefinedMetricSpecification": {
-                    "PredefinedMetricType": "ECSServiceAverageMemoryUtilization"
+                    "PredefinedMetricType": policy["metric_type"],
                 },
-                "ScaleInCooldown": 120,
-                "ScaleOutCooldown": 30,
-            },
-        )
+            }
+            if "disable_scale_in" in policy:
+                policy_configuration["DisableScaleIn"] = policy["disable_scale_in"]
+            if "resource_label" in policy:
+                policy_configuration["PredefinedMetricSpecification"]["ResourceLabel"] = policy["resource_label"]
 
-        log(f"Auto scaling configurado para {service_name}")
+            self.application_autoscaling.put_scaling_policy(
+                PolicyName=f"{self.project}-{service_name}-{policy['name']}",
+                ServiceNamespace="ecs",
+                ResourceId=resource_id,
+                ScalableDimension="ecs:service:DesiredCount",
+                PolicyType="TargetTrackingScaling",
+                TargetTrackingScalingPolicyConfiguration=policy_configuration,
+            )
+
+        log(f"Auto scaling configurado para {service_name}: {', '.join(p['name'] for p in policies)}")
 
     def deploy_services(self):
         imgs = self.config["dockerhub_images"]
@@ -1048,6 +1159,8 @@ class Deployer:
             "KINESIS_ENABLED": "true",
             "KINESIS_STREAM_NAME": self.state["kinesis_stream"]["name"],
             "UVICORN_WORKERS": str(self.config.get("api", {}).get("uvicorn_workers", 4)),
+            "DB_POOL_MIN_CONN": str(self.config.get("api", {}).get("db_pool_min_conn", 1)),
+            "DB_POOL_MAX_CONN": str(self.config.get("api", {}).get("db_pool_max_conn", 8)),
         }
         analytics_state = self.state.get("analytics", {})
         if analytics_state.get("enabled"):
@@ -1150,53 +1263,22 @@ class Deployer:
 
         autoscaling = self.config.get("autoscaling", {})
 
-        self.configure_autoscaling_for_service(
-            "api",
-            autoscaling["api"]["min"],
-            autoscaling["api"]["max"],
-            autoscaling["api"]["target_cpu"],
-            autoscaling["api"].get("target_memory", 70.0),
-        )
+        service_autoscaling_map = {
+            "api": "api",
+            "restaurant-simulator": "restaurant_simulator",
+            "routing-service": "routing_service",
+            "delivery-service": "delivery_service",
+            "realtime-metrics-service": "realtime_metrics_service",
+        }
+        for service_name, config_key in service_autoscaling_map.items():
+            if config_key not in autoscaling:
+                continue
+            self.configure_autoscaling_for_service(service_name, autoscaling[config_key])
 
-        self.configure_autoscaling_for_service(
-            "restaurant-simulator",
-            autoscaling["restaurant_simulator"]["min"],
-            autoscaling["restaurant_simulator"]["max"],
-            autoscaling["restaurant_simulator"]["target_cpu"],
-            autoscaling["restaurant_simulator"].get("target_memory", 70.0),
-        )
-
-        self.configure_autoscaling_for_service(
-            "routing-service",
-            autoscaling["routing_service"]["min"],
-            autoscaling["routing_service"]["max"],
-            autoscaling["routing_service"]["target_cpu"],
-            autoscaling["routing_service"].get("target_memory", 70.0),
-        )
-
-        self.configure_autoscaling_for_service(
-            "delivery-service",
-            autoscaling["delivery_service"]["min"],
-            autoscaling["delivery_service"]["max"],
-            autoscaling["delivery_service"]["target_cpu"],
-            autoscaling["delivery_service"].get("target_memory", 70.0),
-        )
-
-        if "realtime_metrics_service" in autoscaling:
-            self.configure_autoscaling_for_service(
-                "realtime-metrics-service",
-                autoscaling["realtime_metrics_service"]["min"],
-                autoscaling["realtime_metrics_service"]["max"],
-                autoscaling["realtime_metrics_service"]["target_cpu"],
-                autoscaling["realtime_metrics_service"].get("target_memory", 70.0),
-            )
         if "redis_metrics_worker" in autoscaling and redis_state.get("enabled"):
             self.configure_autoscaling_for_service(
                 "redis-metrics-worker",
-                autoscaling["redis_metrics_worker"]["min"],
-                autoscaling["redis_metrics_worker"]["max"],
-                autoscaling["redis_metrics_worker"]["target_cpu"],
-                autoscaling["redis_metrics_worker"].get("target_memory", 70.0),
+                autoscaling["redis_metrics_worker"],
             )
     def wait_for_api(self, timeout_seconds: int = 1200):
         dns = self.state["alb"]["dns_name"]

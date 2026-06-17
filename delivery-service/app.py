@@ -74,6 +74,19 @@ def assign_courier_in_api(
     return response.json()
 
 
+def release_courier_in_api(order_id: int, courier_id: int, reason: str):
+    response = requests.post(
+        f"{API_URL}/orders/{order_id}/release-courier",
+        json={
+            "courier_id": courier_id,
+            "reason": reason,
+        },
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def choose_courier(
     restaurant: Dict[str, Any],
     customer: Dict[str, Any],
@@ -193,6 +206,7 @@ def alocar_entrega(data: dict):
 
 @app.post("/dispatch")
 def dispatch_delivery(body: DispatchRequest):
+    courier_id: int | None = None
     try:
         order_id = int(body.order_id)
         order_data = get_order_dispatch_data(order_id)
@@ -253,4 +267,16 @@ def dispatch_delivery(body: DispatchRequest):
     except HTTPException:
         raise
     except Exception as exc:
+        if courier_id is not None:
+            try:
+                release_courier_in_api(
+                    order_id=body.order_id,
+                    courier_id=courier_id,
+                    reason=f"dispatch_failed: {type(exc).__name__}",
+                )
+            except Exception as release_exc:
+                print(
+                    f"Failed to release courier {courier_id} for order {body.order_id} "
+                    f"after dispatch error: {release_exc}"
+                )
         raise HTTPException(status_code=500, detail=str(exc))
