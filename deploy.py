@@ -1046,10 +1046,39 @@ class Deployer:
                 "PredefinedMetricSpecification": {
                     "PredefinedMetricType": "ECSServiceAverageMemoryUtilization"
                 },
-                "ScaleInCooldown": 120,
-                "ScaleOutCooldown": 30,
+                "ScaleInCooldown": scale_in_cooldown,
+                "ScaleOutCooldown": scale_out_cooldown,
             },
         )
+
+        if target_requests_per_target is not None:
+            if not target_group_arn:
+                log(
+                    f"Autoscaling por request configurado para {service_name}, "
+                    "mas sem target group associado; policy ALBRequestCountPerTarget ignorada."
+                )
+            else:
+                resource_label = self._build_alb_resource_label(target_group_arn)
+                self.application_autoscaling.put_scaling_policy(
+                    PolicyName=f"{self.project}-{service_name}-requests-target",
+                    ServiceNamespace="ecs",
+                    ResourceId=resource_id,
+                    ScalableDimension="ecs:service:DesiredCount",
+                    PolicyType="TargetTrackingScaling",
+                    TargetTrackingScalingPolicyConfiguration={
+                        "TargetValue": target_requests_per_target,
+                        "PredefinedMetricSpecification": {
+                            "PredefinedMetricType": "ALBRequestCountPerTarget",
+                            "ResourceLabel": resource_label,
+                        },
+                        "ScaleInCooldown": scale_in_cooldown,
+                        "ScaleOutCooldown": scale_out_cooldown,
+                    },
+                )
+                log(
+                    f"Policy de autoscaling por request aplicada para {service_name} "
+                    f"(target={target_requests_per_target}, resource_label={resource_label})"
+                )
 
         log(f"Auto scaling configurado para {service_name}")
 
