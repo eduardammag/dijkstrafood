@@ -36,6 +36,14 @@ Por fim, o \textbf{Dashboard Frontend} consome tanto os dados de tempo real quan
 
 \section{Gargalos}
 
+\subsection{Gargalo no Routing Service}
+
+Durante o desenvolvimento, a integração do \textit{courier-simulator} com o \textit{routing-service} introduziu um gargalo não imediatamente óbvio. Após a correção da rota do entregador, que passou a seguir o caminho calculado pelo algoritmo de Dijkstra em vez de uma interpolação direta entre dois pontos, o sistema apresentou um comportamento indesejado: havia muitos pedidos no estado \textit{ready to pickup} e entregadores disponíveis, mas apenas um ou dois entregadores processavam entregas simultaneamente.
+
+A causa foi identificada na forma como o \textit{delivery-service} solicitava rotas ao \textit{routing-service}: todas as requisições eram processadas por uma única \textit{task}, criando uma fila serializada. Os entregadores existiam e estavam disponíveis, mas ficavam bloqueados aguardando a resposta de rota antes de iniciar o deslocamento. O gargalo não estava na alocação nem na quantidade de entregadores, mas na capacidade de processamento paralelo das requisições de roteamento.
+
+A solução foi o aumento do número de \textit{tasks} paralelas dedicadas ao \textit{routing-service}, permitindo que múltiplas requisições de rota fossem processadas simultaneamente. Adicionalmente, o \textit{autoscaling} foi reconfigurado para distribuir a carga de forma mais adequada ao padrão de uso observado, evitando que o serviço de roteamento se tornasse o ponto único de contenção do fluxo de entregas.
+
 \section{Dashboard}
 \subsection{Fluxo em tempo real}
 
