@@ -162,7 +162,7 @@ Build/push das imagens:
 
 ```bash
 docker build -t marimarifr/dijkstrafood-api:latest ./order-service
-docker build -t marimarifr/dijkstrafood-restaurant-simulator:latest ./restaurant-simulator
+docker build -t marimarifr/dijkstrafood-restaurant-simulator:latest ./operational_simulator
 docker build -t marimarifr/dijkstrafood-delivery-service:latest ./delivery-service
 docker build -t marimarifr/dijkstrafood-routing-service:latest -f ./delivery-service/routing_service/Dockerfile ./delivery-service
 docker build -t marimarifr/dijkstrafood-realtime-metrics-service:latest ./realtime_metrics_service

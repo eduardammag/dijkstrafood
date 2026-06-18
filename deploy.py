@@ -1,5 +1,6 @@
 import argparse
 import json
+import random
 import sys
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import requests
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError, WaiterError
 
 
@@ -79,6 +81,12 @@ class Deployer:
         self.region = config["region"]
         self.project = config["project_name"]
         self.session = boto3.Session(region_name=self.region)
+        self.aws_retry_config = Config(
+            retries={
+                "max_attempts": 10,
+                "mode": "adaptive",
+            }
+        )
         self.ec2 = self.session.client("ec2")
         self.rds = self.session.client("rds")
         self.ecs = self.session.client("ecs")
@@ -92,13 +100,39 @@ class Deployer:
         self.s3 = self.session.client("s3")
         self.kinesis = self.session.client("kinesis")
         self.firehose = self.session.client("firehose")
-        self.glue = self.session.client("glue")
+        self.glue = self.session.client("glue", config=self.aws_retry_config)
         self.elasticache = self.session.client("elasticache")
         self.application_autoscaling = self.session.client("application-autoscaling")
         self.state = {"project": self.project, "region": self.region}
 
     def save_state(self):
         STATE_FILE.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+
+    def _glue_call(self, operation_name: str, **kwargs):
+        operation = getattr(self.glue, operation_name)
+        max_attempts = 8
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return operation(**kwargs)
+            except ClientError as e:
+                error_code = e.response["Error"].get("Code", "")
+                if error_code not in {
+                    "ThrottlingException",
+                    "TooManyRequestsException",
+                    "OperationTimeoutException",
+                    "InternalServiceException",
+                }:
+                    raise
+                if attempt == max_attempts:
+                    raise
+
+                sleep_seconds = min(30.0, (2 ** (attempt - 1)) + random.uniform(0, 1))
+                log(
+                    f"Glue {operation_name} sofreu throttling/tentativa {attempt}/{max_attempts}; "
+                    f"aguardando {sleep_seconds:.1f}s"
+                )
+                time.sleep(sleep_seconds)
 
     def ensure_default_vpc(self):
         log("Buscando VPC default")
@@ -390,12 +424,12 @@ class Deployer:
         location = f"s3://{bucket_name}/{cfg['s3_prefix']}/"
 
         try:
-            self.glue.get_database(Name=database_name)
+            self._glue_call("get_database", Name=database_name)
             log(f"Glue database existe: {database_name}")
         except ClientError as e:
             if e.response["Error"]["Code"] != "EntityNotFoundException":
                 raise
-            self.glue.create_database(DatabaseInput={"Name": database_name})
+            self._glue_call("create_database", DatabaseInput={"Name": database_name})
             log(f"Glue database criado: {database_name}")
 
         table_input = {
@@ -450,13 +484,13 @@ class Deployer:
         }
 
         try:
-            self.glue.get_table(DatabaseName=database_name, Name=table_name)
-            self.glue.update_table(DatabaseName=database_name, TableInput=table_input)
+            self._glue_call("get_table", DatabaseName=database_name, Name=table_name)
+            self._glue_call("update_table", DatabaseName=database_name, TableInput=table_input)
             log(f"Glue table atualizada: {database_name}.{table_name}")
         except ClientError as e:
             if e.response["Error"]["Code"] != "EntityNotFoundException":
                 raise
-            self.glue.create_table(DatabaseName=database_name, TableInput=table_input)
+            self._glue_call("create_table", DatabaseName=database_name, TableInput=table_input)
             log(f"Glue table criada: {database_name}.{table_name}")
 
     def _purge_dynamodb_table(self, table_name: str):

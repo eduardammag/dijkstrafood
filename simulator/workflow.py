@@ -45,8 +45,9 @@ class OrderWorkflow:
         final_status: Optional[str] = None
         observed_events: Optional[list] = None
 
-        max_attempts = 60
-        interval_seconds = 3.0
+        max_attempts = self.config.observation.max_attempts
+        interval_seconds = self.config.observation.interval_seconds
+        max_consecutive_404 = self.config.observation.max_consecutive_404
         consecutive_404 = 0
 
         for _ in range(max_attempts):
@@ -56,6 +57,8 @@ class OrderWorkflow:
 
             if order_result.status_code == 404:
                 consecutive_404 += 1
+                if consecutive_404 >= max_consecutive_404:
+                    break
                 await asyncio.sleep(interval_seconds)
                 continue
 
@@ -66,9 +69,9 @@ class OrderWorkflow:
                 order_data = response_data.get("order")
 
                 if isinstance(order_data, dict):
-                    final_status = order_data.get("order_status")
+                    final_status = str(order_data.get("order_status") or "").upper()
 
-                if final_status == "DELIVERED":
+                if final_status in {"DELIVERED", "REJECTED"}:
                     break
 
             await asyncio.sleep(interval_seconds)
@@ -119,6 +122,7 @@ class OrderWorkflow:
         has_404 = any(code == 404 for code in query_statuses)
         has_other_errors = any((not q.success) and q.status_code != 404 for q in order_queries)
         delivered = final_status == "DELIVERED"
+        rejected = final_status == "REJECTED"
 
         success = delivered and not has_other_errors and not has_404
 
@@ -127,6 +131,8 @@ class OrderWorkflow:
             error = "order_not_visible_after_creation"
         elif has_other_errors:
             error = "order_query_errors"
+        elif rejected:
+            error = "order_rejected_by_restaurant"
         elif not delivered:
             error = f"order_not_delivered_last_status={final_status}"
 

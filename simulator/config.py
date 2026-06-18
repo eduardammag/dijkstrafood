@@ -53,12 +53,20 @@ class MetricsConfig:
 
 
 @dataclass(frozen=True)
+class ObservationConfig:
+    max_attempts: int
+    interval_seconds: float
+    max_consecutive_404: int
+
+
+@dataclass(frozen=True)
 class SimulatorConfig:
     api: ApiConfig
     population: PopulationConfig
     delivery_flow: DeliveryFlowConfig
     location: LocationSimulationConfig
     metrics: MetricsConfig
+    observation: ObservationConfig
     scenario: ScenarioConfig
 
 
@@ -122,6 +130,11 @@ DEFAULT_CONFIG = SimulatorConfig(
         export_json=True,
         output_dir="simulator_output",
     ),
+    observation=ObservationConfig(
+        max_attempts=int(os.getenv("SIM_OBSERVE_MAX_ATTEMPTS", "30")),
+        interval_seconds=float(os.getenv("SIM_OBSERVE_INTERVAL_SECONDS", "1.5")),
+        max_consecutive_404=int(os.getenv("SIM_OBSERVE_MAX_404", "5")),
+    ),
     scenario=NORMAL_SCENARIO,
 )
 
@@ -142,5 +155,6 @@ def build_config(scenario_name: ScenarioName) -> SimulatorConfig:
         delivery_flow=DEFAULT_CONFIG.delivery_flow,
         location=DEFAULT_CONFIG.location,
         metrics=DEFAULT_CONFIG.metrics,
+        observation=DEFAULT_CONFIG.observation,
         scenario=scenario,
     )

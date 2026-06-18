@@ -17,7 +17,9 @@ class LoadTestResult:
     duration_seconds: int
     expected_orders: int
     attempted_orders: int
-    accepted_orders: int
+    created_orders: int
+    confirmed_orders: int
+    rejected_orders: int
     delivered_orders: int
     failed_orders: int
     emission_elapsed_seconds: float
@@ -28,10 +30,18 @@ class LoadTestResult:
         return float(self.configured_orders_per_second)
 
     @property
-    def accepted_throughput(self) -> float:
+    def confirmed_throughput(self) -> float:
         if self.emission_elapsed_seconds <= 0:
             return 0.0
-        return self.accepted_orders / self.emission_elapsed_seconds
+        return self.confirmed_orders / self.emission_elapsed_seconds
+
+    @property
+    def accepted_orders(self) -> int:
+        return self.confirmed_orders
+
+    @property
+    def accepted_throughput(self) -> float:
+        return self.confirmed_throughput
 
     @property
     def delivered_throughput(self) -> float:
@@ -100,9 +110,19 @@ class LoadRunner:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         end_to_end_elapsed_seconds = time.perf_counter() - start
 
-        accepted_orders = 0
+        created_orders = 0
+        confirmed_orders = 0
+        rejected_orders = 0
         delivered_orders = 0
         failed_orders = 0
+        accepted_statuses = {
+            "CONFIRMED",
+            "PREPARING",
+            "READY_FOR_PICKUP",
+            "PICKED_UP",
+            "IN_TRANSIT",
+            "DELIVERED",
+        }
 
         for result in results:
             if isinstance(result, Exception):
@@ -110,11 +130,17 @@ class LoadRunner:
                 continue
 
             if result.created_order.success:
-                accepted_orders += 1
+                created_orders += 1
+
+            final_status = (result.final_status or "").upper()
+            if final_status == "REJECTED":
+                rejected_orders += 1
+            elif final_status in accepted_statuses:
+                confirmed_orders += 1
 
             if result.success:
                 delivered_orders += 1
-            else:
+            elif final_status != "REJECTED":
                 failed_orders += 1
 
         return LoadTestResult(
@@ -123,7 +149,9 @@ class LoadRunner:
             duration_seconds=duration_seconds,
             expected_orders=expected_orders,
             attempted_orders=len(tasks),
-            accepted_orders=accepted_orders,
+            created_orders=created_orders,
+            confirmed_orders=confirmed_orders,
+            rejected_orders=rejected_orders,
             delivered_orders=delivered_orders,
             failed_orders=failed_orders,
             emission_elapsed_seconds=emission_elapsed_seconds,

@@ -18,10 +18,12 @@ def export_json_report(result: LoadTestResult, metrics: MetricsCollector, output
             "duration_seconds": result.duration_seconds,
             "expected_orders": result.expected_orders,
             "attempted_orders": result.attempted_orders,
-            "accepted_orders": result.accepted_orders,
+            "created_orders": result.created_orders,
+            "confirmed_orders": result.confirmed_orders,
+            "rejected_orders": result.rejected_orders,
             "delivered_orders": result.delivered_orders,
             "failed_orders": result.failed_orders,
-            "accepted_throughput": result.accepted_throughput,
+            "confirmed_throughput": result.confirmed_throughput,
             "delivered_throughput": result.delivered_throughput,
             "emission_elapsed_seconds": result.emission_elapsed_seconds,
             "end_to_end_elapsed_seconds": result.end_to_end_elapsed_seconds,
@@ -53,10 +55,12 @@ def print_load_test_summary(result: LoadTestResult):
     print(f"Duration (s): {result.duration_seconds}")
     print(f"Expected Orders: {result.expected_orders}")
     print(f"Attempted Orders: {result.attempted_orders}")
-    print(f"Accepted Orders: {result.accepted_orders}")
+    print(f"Created Orders: {result.created_orders}")
+    print(f"Confirmed Orders: {result.confirmed_orders}")
+    print(f"Rejected Orders: {result.rejected_orders}")
     print(f"Delivered Orders: {result.delivered_orders}")
     print(f"Failed Orders: {result.failed_orders}")
-    print(f"Accepted Throughput: {result.accepted_throughput:.2f} orders/s")
+    print(f"Confirmed Throughput: {result.confirmed_throughput:.2f} orders/s")
     print(f"Delivered Throughput: {result.delivered_throughput:.2f} orders/s")
     print("========================================")
 
