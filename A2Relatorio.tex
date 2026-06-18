@@ -42,7 +42,7 @@ Durante o desenvolvimento, a integração do \textit{courier-simulator} com o \t
 
 A causa foi identificada na forma como o \textit{delivery-service} solicitava rotas ao \textit{routing-service}: todas as requisições eram processadas por uma única \textit{task}, criando uma fila serializada. Os entregadores existiam e estavam disponíveis, mas ficavam bloqueados aguardando a resposta de rota antes de iniciar o deslocamento. O gargalo não estava na alocação nem na quantidade de entregadores, mas na capacidade de processamento paralelo das requisições de roteamento.
 
-A solução foi o aumento do número de \textit{tasks} paralelas dedicadas ao \textit{routing-service}, permitindo que múltiplas requisições de rota fossem processadas simultaneamente. Adicionalmente, o \textit{autoscaling} foi reconfigurado para distribuir a carga de forma mais adequada ao padrão de uso observado, evitando que o serviço de roteamento se tornasse o ponto único de contenção do fluxo de entregas.
+A solução foi o aumento do número de \textit{tasks} paralelas dedicadas ao \textit{routing-service}, permitindo que múltiplas requisições de rota fossem processadas simultaneamente. Adicionalmente, o serviço foi colocado atrás de um balanceador de carga, permitindo distribuir as requisiçõoes entre múltiplas instâncias, e o \textit{autoscaling} foi reconfigurado com base no volume de \textit{requests}. Com isso, a capacidade do \textit{routing-service} passa a crescer conforme a demanda observada, reduzindo o risco de ele se tornar o ponto único de contenção no fluxo de entregas.
 
 \section{Dashboard}
 \subsection{Fluxo em tempo real}
