@@ -4,6 +4,9 @@
   "api": {
     "uvicorn_workers": 4
   },
+  "restaurant_simulator": {
+    "acceptance_rate": 1.0
+  },
   "your_ip_cidr": "0.0.0.0/0",
   "dockerhub_images": {
     "api": "SEU_USUARIO/dijkstrafood-api:latest",

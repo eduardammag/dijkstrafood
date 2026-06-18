@@ -72,7 +72,7 @@ class SimulatorConfig:
 
 TESTE_SCENARIO = ScenarioConfig(
     name="teste",
-    orders_per_second=1,
+    orders_per_second=10,
     duration_seconds=1,
 )
 

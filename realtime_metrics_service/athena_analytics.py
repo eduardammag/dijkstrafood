@@ -89,8 +89,8 @@ class AthenaAnalyticsClient:
             SELECT
               count(*) AS total_orders,
               sum(CASE WHEN status = 'DELIVERED' THEN 1 ELSE 0 END) AS orders_delivered,
-              sum(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) AS orders_cancelled,
-              sum(CASE WHEN status NOT IN ('DELIVERED', 'CANCELLED') THEN 1 ELSE 0 END) AS orders_open
+              sum(CASE WHEN status IN ('CANCELLED', 'REJECTED') THEN 1 ELSE 0 END) AS orders_cancelled,
+              sum(CASE WHEN status NOT IN ('DELIVERED', 'CANCELLED', 'REJECTED') THEN 1 ELSE 0 END) AS orders_open
             FROM latest_orders
             """
         )

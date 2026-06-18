@@ -104,6 +104,7 @@ class MetricsState:
         with self._lock:
             now = time.time()
             self._prune_old(now)
+            cancelled_statuses = {"CANCELLED", "REJECTED"}
 
             preparing = 0
             waiting_courier = 0
@@ -121,7 +122,7 @@ class MetricsState:
                     delivering += 1
                 elif status == "DELIVERED":
                     delivered += 1
-                elif status == "CANCELLED":
+                elif status in cancelled_statuses:
                     cancelled += 1
 
             couriers_available = sum(1 for is_available in self._courier_available.values() if is_available)

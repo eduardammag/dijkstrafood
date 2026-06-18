@@ -1206,7 +1206,9 @@ class Deployer:
             "API_URL": internal_api_base,
             "DELIVERY_SERVICE_URL": f"{alb_base}:8001",
             "REQUEST_TIMEOUT_SECONDS": "15",
-            "ACCEPTANCE_RATE": "1.0",
+            "ACCEPTANCE_RATE": str(
+                restaurant_cfg.get("acceptance_rate", 1.0)
+            ),
             "CONFIRMED_DELAY_SECONDS": str(
                 restaurant_cfg.get("confirmed_delay_seconds", 0.1)
             ),
