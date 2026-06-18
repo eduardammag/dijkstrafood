@@ -51,7 +51,7 @@ app = FastAPI(title="Realtime Metrics Service")
 state     = MetricsState()
 analytics = AnalyticsState()
 athena_analytics = AthenaAnalyticsClient()
-consumer  = KinesisConsumer(state)
+consumer  = KinesisConsumer(state, on_event=analytics.ingest_event)
 redis_store = RedisSnapshotStore()
 latency_store = LatencyMetricsStore()
 
@@ -211,7 +211,17 @@ def get_metrics_latency_recent(limit: int = 200):
 
 @app.get("/metrics/analytics")
 def get_metrics_analytics():
-    return athena_analytics.snapshot()
+    athena_snapshot = athena_analytics.snapshot()
+    if not athena_snapshot.get("error"):
+        return athena_snapshot
+
+    fallback = analytics.snapshot()
+    fallback["athena_error"] = athena_snapshot.get("error")
+    fallback["database"] = athena_snapshot.get("database")
+    fallback["table"] = athena_snapshot.get("table")
+    fallback["partition"] = athena_snapshot.get("partition")
+    fallback["source"] = "realtime-rollup-fallback"
+    return fallback
 
 
 @app.get("/metrics/realtime-rollup")

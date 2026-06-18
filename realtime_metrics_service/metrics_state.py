@@ -18,7 +18,9 @@ class MetricsState:
         self._created_timestamps: deque[float] = deque()
         self._latency_samples: deque[tuple[float, float]] = deque()
         self._format_counts: Counter[str] = Counter()
+        self._event_type_counts: Counter[str] = Counter()
         self._unknown_events = 0
+        self._total_events_processed = 0
         self._last_event_at: float | None = None
         self._last_event_processed_at: float | None = None
         self._last_event_latency_ms: float | None = None
@@ -29,12 +31,14 @@ class MetricsState:
         latency_ms = max(0.0, (processed_now - event_timestamp) * 1000.0)
 
         with self._lock:
+            self._total_events_processed += 1
             self._last_event_at = event_timestamp
             self._last_event_processed_at = processed_now
             self._last_event_latency_ms = latency_ms
             self._processed_timestamps.append(processed_now)
             self._latency_samples.append((processed_now, latency_ms))
             self._format_counts[event.format_name] += 1
+            self._event_type_counts[event.event_type] += 1
             self._prune_old(processed_now)
 
             if event.event_type == "UNKNOWN":
@@ -125,6 +129,21 @@ class MetricsState:
             active_orders = preparing + waiting_courier + delivering
             latency_values = [sample[1] for sample in self._latency_samples]
             avg_latency_ms = (sum(latency_values) / len(latency_values)) if latency_values else 0.0
+            total_orders = len(self._seen_orders)
+            delivery_rate_pct = round((delivered / total_orders) * 100, 1) if total_orders else 0.0
+            cancel_rate_pct = round((cancelled / total_orders) * 100, 1) if total_orders else 0.0
+            current_status = [
+                {"label": "PREPARING", "value": preparing},
+                {"label": "READY_FOR_PICKUP", "value": waiting_courier},
+                {"label": "IN_DELIVERY", "value": delivering},
+                {"label": "DELIVERED", "value": delivered},
+                {"label": "CANCELLED", "value": cancelled},
+            ]
+            current_status = [row for row in current_status if row["value"] > 0]
+            by_type = [
+                {"label": event_type, "value": total}
+                for event_type, total in self._event_type_counts.most_common()
+            ]
 
             return {
                 "orders_preparing": preparing,
@@ -134,23 +153,32 @@ class MetricsState:
                 "orders_completed": delivered,
                 "orders_cancelled": cancelled,
                 "orders_created_per_minute": len(self._created_timestamps),
-                "total_orders_processed": len(self._seen_orders),
+                "total_orders_processed": total_orders,
+                "total_events_processed": self._total_events_processed,
                 "couriers_available": couriers_available,
                 "orders_processed_per_minute": len(self._processed_timestamps),
                 "event_to_consumer_latency_ms_avg_1m": round(avg_latency_ms, 2),
                 "event_to_consumer_latency_ms_last": round(self._last_event_latency_ms or 0.0, 2),
-                "orders_total": len(self._seen_orders),
+                "orders_total": total_orders,
+                "orders_open": active_orders,
                 "active_orders": active_orders,
                 "active_couriers": active_couriers,
+                "delivery_rate_pct": delivery_rate_pct,
+                "cancel_rate_pct": cancel_rate_pct,
                 "avg_delivery_time_ms": 0.0,
                 "total_revenue": 0.0,
+                "current_status": current_status,
+                "by_status": current_status,
+                "by_type": by_type,
                 "meta": {
                     "last_event_at": self._last_event_at,
                     "last_event_produced_at_ms": int(self._last_event_at * 1000) if self._last_event_at else None,
                     "last_event_processed_at_ms": int(self._last_event_processed_at * 1000) if self._last_event_processed_at else None,
                     "last_event_latency_ms": round(self._last_event_latency_ms or 0.0, 2),
                     "unknown_events": self._unknown_events,
+                    "total_events_processed": self._total_events_processed,
                     "detected_event_formats": dict(self._format_counts),
+                    "detected_event_types": dict(self._event_type_counts),
                     "tracked_orders": len(self._order_status),
                     "tracked_couriers": len(self._courier_available),
                 },

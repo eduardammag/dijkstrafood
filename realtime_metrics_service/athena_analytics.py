@@ -125,6 +125,117 @@ class AthenaAnalyticsClient:
             """
         )
 
+        state_timing_rows = self._run_query(
+            f"""
+            WITH status_events AS (
+              SELECT
+                order_id,
+                coalesce(to_status, event_status, from_status) AS status,
+                try(from_iso8601_timestamp(created_at)) AS created_ts,
+                lead(try(from_iso8601_timestamp(created_at))) OVER (
+                  PARTITION BY order_id
+                  ORDER BY
+                    try(from_iso8601_timestamp(created_at)),
+                    coalesce(try_cast(event_id AS bigint), 0)
+                ) AS next_ts
+              FROM {base}
+              WHERE {where}
+                AND order_id IS NOT NULL
+                AND coalesce(to_status, event_status, from_status) IS NOT NULL
+                AND try(from_iso8601_timestamp(created_at)) IS NOT NULL
+            )
+            SELECT
+              status,
+              count(*) AS transitions,
+              round(avg(date_diff('second', created_ts, next_ts)), 1) AS avg_seconds
+            FROM status_events
+            WHERE next_ts IS NOT NULL
+            GROUP BY status
+            ORDER BY avg_seconds DESC
+            """
+        )
+
+        heatmap_rows = self._run_query(
+            f"""
+            SELECT
+              day_of_week(try(from_iso8601_timestamp(created_at))) AS dow_num,
+              CASE day_of_week(try(from_iso8601_timestamp(created_at)))
+                WHEN 1 THEN 'Seg'
+                WHEN 2 THEN 'Ter'
+                WHEN 3 THEN 'Qua'
+                WHEN 4 THEN 'Qui'
+                WHEN 5 THEN 'Sex'
+                WHEN 6 THEN 'Sab'
+                WHEN 7 THEN 'Dom'
+                ELSE 'N/A'
+              END AS dow_label,
+              hour(try(from_iso8601_timestamp(created_at))) AS hour_utc,
+              count(DISTINCT order_id) AS total_orders
+            FROM {base}
+            WHERE {where}
+              AND order_id IS NOT NULL
+              AND try(from_iso8601_timestamp(created_at)) IS NOT NULL
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 3
+            """
+        )
+
+        delivery_histogram_rows = self._run_query(
+            f"""
+            WITH order_times AS (
+              SELECT
+                order_id,
+                min(try(from_iso8601_timestamp(created_at))) AS created_ts,
+                max(
+                  CASE
+                    WHEN coalesce(to_status, event_status, from_status) = 'DELIVERED'
+                    THEN try(from_iso8601_timestamp(created_at))
+                  END
+                ) AS delivered_ts
+              FROM {base}
+              WHERE {where}
+                AND order_id IS NOT NULL
+                AND try(from_iso8601_timestamp(created_at)) IS NOT NULL
+              GROUP BY order_id
+            ),
+            delivered_orders AS (
+              SELECT
+                order_id,
+                date_diff('minute', created_ts, delivered_ts) AS delivery_minutes
+              FROM order_times
+              WHERE created_ts IS NOT NULL
+                AND delivered_ts IS NOT NULL
+                AND delivered_ts >= created_ts
+            )
+            SELECT
+              bucket,
+              sort_key,
+              count(*) AS total_orders
+            FROM (
+              SELECT
+                CASE
+                  WHEN delivery_minutes <= 10 THEN '00-10 min'
+                  WHEN delivery_minutes <= 20 THEN '11-20 min'
+                  WHEN delivery_minutes <= 30 THEN '21-30 min'
+                  WHEN delivery_minutes <= 45 THEN '31-45 min'
+                  WHEN delivery_minutes <= 60 THEN '46-60 min'
+                  ELSE '60+ min'
+                END AS bucket,
+                CASE
+                  WHEN delivery_minutes <= 10 THEN 1
+                  WHEN delivery_minutes <= 20 THEN 2
+                  WHEN delivery_minutes <= 30 THEN 3
+                  WHEN delivery_minutes <= 45 THEN 4
+                  WHEN delivery_minutes <= 60 THEN 5
+                  ELSE 6
+                END AS sort_key
+              FROM delivered_orders
+            )
+            GROUP BY bucket, sort_key
+            ORDER BY sort_key
+            """
+        )
+
         total_events = _to_int((total_events_rows[0] if total_events_rows else {}).get("total_events"))
         order_summary = order_summary_rows[0] if order_summary_rows else {}
         total_orders = _to_int(order_summary.get("total_orders"))
@@ -165,6 +276,42 @@ class AthenaAnalyticsClient:
                 }
                 for row in hourly_rows
             ],
+            "avg_time_by_status": [
+                {
+                    "label": row.get("status") or "UNKNOWN",
+                    "value": _to_float(row.get("avg_seconds")),
+                    "transitions": _to_int(row.get("transitions")),
+                }
+                for row in state_timing_rows
+            ],
+            "demand_heatmap": [
+                {
+                    "day_of_week": row.get("dow_label") or "N/A",
+                    "day_of_week_num": _to_int(row.get("dow_num")),
+                    "hour_utc": _to_int(row.get("hour_utc")),
+                    "total_orders": _to_int(row.get("total_orders")),
+                }
+                for row in heatmap_rows
+            ],
+            "delivery_time_histogram": [
+                {
+                    "label": row.get("bucket") or "N/A",
+                    "value": _to_int(row.get("total_orders")),
+                }
+                for row in delivery_histogram_rows
+            ],
+            "compatibility": {
+                "implemented": [
+                    "volume_de_pedidos_no_tempo",
+                    "tempo_medio_em_cada_estado",
+                    "heatmap_demanda_por_horario_e_dia_da_semana",
+                    "histograma_do_tempo_total_de_entrega",
+                ],
+                "blocked_by_schema": [
+                    "distribuicao_de_pedidos_por_regiao",
+                    "top_10_restaurantes_por_volume",
+                ],
+            },
             "error": None,
         }
 
@@ -223,6 +370,13 @@ class AthenaAnalyticsClient:
             "by_status": [],
             "by_type": [],
             "events_by_hour": [],
+            "avg_time_by_status": [],
+            "demand_heatmap": [],
+            "delivery_time_histogram": [],
+            "compatibility": {
+                "implemented": [],
+                "blocked_by_schema": [],
+            },
             "error": error,
         }
 
@@ -232,3 +386,10 @@ def _to_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _to_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
