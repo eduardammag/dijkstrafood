@@ -225,39 +225,3 @@ Para medir latencia realtime (p50/p95) automaticamente:
 cd simulator
 python latency_benchmark.py --scenario teste --sample-interval 1 --post-capture-seconds 15 --export-json
 ```
-
-## AWS - Recursos Necessários
-
-Para o dashboard realtime funcionar em EC2 ou ECS, os recursos abaixo precisam existir:
-
-1. Kinesis Data Stream com nome igual à variável `KINESIS_STREAM_NAME`.
-2. Credenciais/IAM com permissões mínimas:
-  - `kinesis:DescribeStream`
-  - `kinesis:ListShards`
-  - `kinesis:GetShardIterator`
-  - `kinesis:GetRecords`
-3. Rede liberada para saída HTTPS do container para endpoint do Kinesis.
-
-Deploy em EC2:
-
-- Executar o container `realtime-metrics-service` com as variáveis acima.
-
-Deploy em ECS:
-
-- Publicar a imagem Docker do `realtime-metrics-service`.
-- Criar task/service ECS com porta `8010`.
-- Injetar as variáveis de ambiente e anexar role com permissões de leitura no Kinesis.
-
-## Configuracao de Deploy
-
-Os arquivos `config.json`, `config_req.json` e `config.json.example` agora suportam:
-
-- `dockerhub_images.realtime_metrics_service`
-- bloco `kinesis` (nome do stream, shard count e parametros do consumer)
-- bloco `redis` (cria ElastiCache Redis por default; use `url` para um Redis externo)
-- `ecs.desired_count_realtime_metrics_service`
-- `ecs.desired_count_redis_metrics_worker`
-- `autoscaling.realtime_metrics_service`
-- `autoscaling.redis_metrics_worker`
-
-O `deploy.py` cria automaticamente o stream Kinesis, o Redis/ElastiCache, o worker Kinesis -> Redis e publica o endpoint do dashboard em `http://<alb>:8010/dashboard`.
