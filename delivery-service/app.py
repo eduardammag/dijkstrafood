@@ -5,18 +5,7 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from matcher import encontrar_entregador, mapear_entregadores
 from utils import filtrar_entregadores, gerar_rota_simples
-
-try:
-    from routing_service.graph import carregar_grafo
-    from graph_utils import nearest_node
-
-    G = carregar_grafo()
-except Exception as exc:
-    print(f"Routing graph unavailable: {exc}")
-    G = None
-    nearest_node = None
 
 app = FastAPI()
 
@@ -82,23 +71,13 @@ def choose_courier(
     if not eligible:
         raise RuntimeError("No courier available for allocation")
 
-    if G is not None and nearest_node is not None:
-        try:
-            rest_node = nearest_node(G, restaurant["lon"], restaurant["lat"])
-            courier_nodes = mapear_entregadores(G, eligible)
-            selected_courier_id = encontrar_entregador(G, rest_node, courier_nodes)
+    def squared_distance(courier: Dict[str, Any]) -> float:
+        return (
+            (float(courier["lat"]) - float(restaurant["lat"])) ** 2
+            + (float(courier["lon"]) - float(restaurant["lon"])) ** 2
+        )
 
-            if selected_courier_id:
-                selected = next(
-                    (c for c in eligible if int(c["id"]) == int(selected_courier_id)),
-                    None,
-                )
-                if selected is not None:
-                    return selected
-        except Exception as exc:
-            print(f"Graph matching failed, using geometric fallback: {exc}")
-
-    return eligible[0]
+    return min(eligible, key=squared_distance)
 
 
 def calculate_routes(

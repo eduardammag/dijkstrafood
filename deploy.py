@@ -953,8 +953,35 @@ class Deployer:
 
         if existing_service:
             existing_lbs = existing_service.get("loadBalancers", [])
-            if attach_to_alb and not existing_lbs:
-                log(f"Recriando {service_name} para adicionar load balancer...")
+            expected_lb = None
+            if attach_to_alb:
+                expected_lb = {
+                    "targetGroupArn": target_group_arn or self.state["alb_target_group_arn"],
+                    "containerName": container_name,
+                    "containerPort": container_port,
+                }
+
+            needs_recreation = False
+            if attach_to_alb:
+                if not existing_lbs:
+                    needs_recreation = True
+                    log(f"{service_name} sem load balancer associado; recriando serviÃ§o")
+                else:
+                    current_lb = existing_lbs[0]
+                    if (
+                        current_lb.get("targetGroupArn") != expected_lb["targetGroupArn"]
+                        or current_lb.get("containerName") != expected_lb["containerName"]
+                        or current_lb.get("containerPort") != expected_lb["containerPort"]
+                    ):
+                        needs_recreation = True
+                        log(
+                            f"{service_name} com load balancer divergente "
+                            f"(atual tg={current_lb.get('targetGroupArn')}, "
+                            f"container={current_lb.get('containerName')}, "
+                            f"porta={current_lb.get('containerPort')}); recriando serviÃ§o"
+                        )
+
+            if needs_recreation:
                 self.ecs.update_service(cluster=cluster, service=service_name, desiredCount=0)
                 self.ecs.delete_service(cluster=cluster, service=service_name, force=True)
                 time.sleep(20)
@@ -1195,7 +1222,7 @@ class Deployer:
                 delivery_cfg.get("routing_request_timeout_seconds", 4)
             ),
             "UVICORN_WORKERS": str(
-                delivery_cfg.get("uvicorn_workers", 3)
+                delivery_cfg.get("uvicorn_workers", 1)
             ),
         }
         td_delivery = self.register_task_definition(
