@@ -9,6 +9,8 @@ O DijkFood e um sistema distribuido para demonstrar uma arquitetura de delivery 
 - A integracao de negocio entre componentes segue HTTP.
 - Para observabilidade em tempo real, eventos de ciclo de vida de pedidos sao publicados em AWS Kinesis Data Streams.
 
+  **Vídeo de demonstração do dashboard em execução**:[Dashboard dijkistafood](https://youtu.be/-7IxPvYWeJ4)
+
 ## Arquitetura
 
 Fluxo principal:
